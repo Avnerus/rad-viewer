@@ -1,86 +1,68 @@
-# Follow-up Mission for Pi: Fix Real Free-Navigation Input Semantics
+# Follow-up Mission for Pi: Tighten Direction E2E and Status Metadata
 
 ## Objective
-Fix and verify the real browser input behavior for free navigation. The user reports:
-- Keyboard navigation does not work reliably.
-- `W`/`S` and Arrow Up/Down are reversed.
-- Mouse wheel zoom-out stops at the initial view, so the user can effectively only zoom in.
-
-Use real Playwright input coverage (`page.keyboard`, `page.mouse.wheel`) to reproduce and prevent regressions.
+The latest implementation appears to fix the free-navigation direction and zoom semantics, but Codex verification found remaining handoff/test precision issues. Tighten these without reworking the feature.
 
 ## Verification Context
-Codex last pulled the implementation as:
+Codex pulled the latest implementation as:
 
 ```text
-e0fdb69 fix: free navigation keyboard, mouse yaw accumulation, add scroll zoom
+1982f63 fix: correct W/S forward/back direction, reverse zoom semantics, use real Playwright input
 ```
 
-Current known implementation details from prior verification:
-- Free navigation is enabled by one checkbox labeled "Free navigation".
-- `src/lib/spark/freeNavigation.ts` contains `computeMoveDirection`, `applyMovement`, `updateLookAngles`, `applyLook`, `applyZoom`, and key filtering.
-- Existing e2e still relied too much on synthetic events for keyboard/wheel behavior.
-- `applyZoom()` uses `newFov = camera.fov - scrollDelta * sensitivity`.
-- The camera starts at FOV 60, `minFov` 10, `maxFov` 90.
+Observed good changes:
+- `applyMovement()` now maps local forward `-Z` to world `-Z` at yaw `0`.
+- `applyZoom()` now uses `camera.fov + scrollDelta * sensitivity`, so positive `deltaY` zooms out and negative `deltaY` zooms in.
+- E2E uses real `page.keyboard` and `page.mouse.wheel`.
+- Unit tests cover W/S and zoom direction.
+
+Remaining issues:
+- `.codex-handoff/status.md` reports `Follow-up commit: 4985b4e` and `Pushed: no (pending)`, while Codex pulled `1982f63` from `origin/main`.
+- README says "scroll-to-zoom" but does not explicitly state the wheel direction after the user specifically requested it be reversed.
+- The e2e W/S test proves W and S move in opposite directions, but it does not prove W/ArrowUp move along the yaw-derived forward vector. Strengthen it so the browser-level test catches a future reversal.
 
 ## Files Likely Involved
-- `src/lib/spark/freeNavigation.ts`
-- `src/lib/components/RadViewerScene.svelte`
-- `src/App.svelte` only if checkbox focus handling needs adjustment
 - `tests/e2e/rad-viewer.spec.ts`
-- `tests/unit/freeNavigation.test.ts`
-- `AGENTS.md`
 - `README.md`
 - `.codex-handoff/status.md`
+- `AGENTS.md` only if docs need a small wording correction
 
 ## Required Fixes
-1. Add real Playwright keyboard navigation coverage.
-   - Use `page.keyboard.down()` / `page.keyboard.up()` or `page.keyboard.press()` after checking the Free navigation checkbox.
-   - Do not rely only on `window.dispatchEvent()` or `document.dispatchEvent()` from `page.evaluate()`.
-   - The test must prove that keyboard navigation works immediately after enabling the checkbox, matching the user’s reported failure path.
+1. Strengthen e2e direction semantics.
+   - Keep using real Playwright input (`page.keyboard.down/up`), not synthetic events.
+   - Use the camera debug `data-yaw` to compute the expected horizontal forward vector according to the code convention:
+     - local forward is `-Z`;
+     - at yaw `0`, forward is world `(0, -1)` in X/Z;
+     - from current implementation, horizontal forward vector is `[Math.sin(yaw) * -1, Math.cos(yaw) * -1]` for X/Z, or an equivalent expression matching `applyMovement()`.
+   - Assert the W movement delta has a positive dot product with the expected forward vector.
+   - Assert S movement has a negative dot product with that same expected forward vector, or add equivalent ArrowUp/ArrowDown assertions.
+   - Keep the simpler "moved at all" test only if useful, but do not rely on it as the main direction proof.
 
-2. Fix forward/back semantics.
-   - `W` and Arrow Up should move the camera forward in the direction it is looking.
-   - `S` and Arrow Down should move backward.
-   - `A` and Arrow Left should strafe left.
-   - `D` and Arrow Right should strafe right.
-   - Add unit tests for direction semantics and e2e tests proving at least forward/back move in the expected opposite directions.
-   - If the current coordinate system makes “forward” ambiguous, define it explicitly in code comments and tests from the camera’s actual free-nav yaw/orientation, not from an accidental world-axis sign.
+2. Update README wording.
+   - Explicitly document the current wheel convention:
+     - scroll down / positive wheel delta zooms out;
+     - scroll up / negative wheel delta zooms in.
+   - Keep wording concise.
 
-3. Fix zoom-out range and semantics.
-   - The user must be able to zoom both in and out from the initial FOV.
-   - Mouse wheel zoom-out must not stop at the initial FOV 60 unless it reaches the configured `maxFov`.
-   - With current defaults, zoom-out from 60 should be able to increase FOV toward `maxFov` 90.
-   - Reverse the current wheel direction.
-   - Current implementation uses `newFov = camera.fov - scrollDelta * sensitivity`, so positive `deltaY` decreases FOV. Change this convention so:
-     - positive `deltaY` zooms out by increasing FOV toward `maxFov`;
-     - negative `deltaY` zooms in by decreasing FOV toward `minFov`.
-   - Make code, comments, README/AGENTS, and tests agree with this reversed direction.
-   - Add real `page.mouse.wheel(...)` e2e coverage for both zoom-in and zoom-out from initial view.
-   - Keep zoom disabled when free navigation is off.
+3. Correct status metadata.
+   - In `.codex-handoff/status.md`, do not report `4985b4e` or `Pushed: no`.
+   - Report the verified prior implementation commit as `1982f63`.
+   - If the final follow-up hash is not known before commit, say "final pushed commit containing this report" rather than inventing a hash.
 
-4. Preserve existing behavior.
-   - Mouse-look yaw/pitch accumulation must remain fixed.
-   - Pitch clamping must remain tested.
-   - Scroll-driven camera tween must still work when free nav is off.
-   - One checkbox must still control mouse look, keyboard navigation, and wheel zoom together.
-
-5. Correct docs and report metadata.
-   - Update `AGENTS.md` and README if input semantics or wheel direction wording changes.
-   - In `.codex-handoff/status.md`, report the verified prior implementation commit as `e0fdb69`.
-   - Do not leave `Pushed: no` after pushing.
-   - If the final hash is not known before commit, say "final pushed commit containing this report" rather than inventing a hash.
+## Constraints
+- Do not change free-navigation runtime code unless the strengthened e2e exposes a real bug.
+- Do not add separate navigation controls.
+- Do not remove the declarative `<SparkSplats position={[12, 1, 17]} />` path.
+- Do not remove scroll-driven camera mode.
+- Do not make e2e depend on the real remote RAD file.
+- Do not touch unrelated files.
 
 ## Acceptance Criteria
-- Real Playwright keyboard input proves free-navigation keyboard movement works after enabling the checkbox.
-- `W` / Arrow Up moves forward, and `S` / Arrow Down moves backward, not reversed.
-- Direction semantics are covered in unit tests and at least one e2e assertion.
-- Real Playwright mouse wheel input proves zoom-in works with negative `deltaY`.
-- Real Playwright mouse wheel input proves zoom-out works with positive `deltaY`, beyond the initial FOV until the configured maximum.
-- Wheel zoom remains inactive when free navigation is off.
-- Mouse-look yaw/pitch tests remain in place.
-- Scroll-driven camera tween still works when free navigation is off.
-- README and AGENTS describe the correct key and zoom behavior.
-- Status report metadata is accurate.
+- E2E using real Playwright keyboard input proves W/ArrowUp forward semantics, not just nonzero movement.
+- E2E proves S/ArrowDown backward semantics or equivalent inverse movement.
+- README explicitly states the wheel direction for zoom.
+- Status report metadata accurately references `1982f63` as the prior implementation and does not claim `Pushed: no` after the final push.
+- Existing unit/e2e coverage for zoom direction remains intact.
 
 ## Tests to Run
 Run these before finalizing:
@@ -93,10 +75,6 @@ Run these before finalizing:
 ## Things Pi Must Not Change
 - Do not remove `.codex-handoff/mission.md`.
 - Do not overwrite unrelated user work.
-- Do not remove the declarative `<SparkSplats position={[12, 1, 17]} />` path.
-- Do not add separate navigation controls.
-- Do not remove the scroll-driven camera interaction.
-- Do not make e2e depend on the real remote RAD file.
 - Do not push without `status.md`.
 - Always write `status.md` as the last file modification before committing/pushing.
 - After pushing, do not perform any more verifications or modifications.
@@ -132,7 +110,7 @@ Write `.codex-handoff/status.md` with:
 
 ## Commit / Push
 - Branch:
-- Verified prior implementation commit: e0fdb69
+- Verified prior implementation commit: 1982f63
 - Follow-up commit:
 - Pushed: yes/no
 ```
