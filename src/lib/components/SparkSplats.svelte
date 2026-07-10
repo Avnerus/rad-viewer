@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { T, useThrelte } from '@threlte/core'
+  import { useThrelte } from '@threlte/core'
   import { onMount, onDestroy } from 'svelte'
   import { SparkRenderer, SplatMesh } from '@sparkjsdev/spark'
   import type { DeviceProfile } from '$lib/types'
@@ -27,32 +27,32 @@
     behindFoveate: profile.sparkRenderer.behindFoveate as number,
   }
 
-  let spark: SparkRenderer | null = $state(null)
-  let mesh: SplatMesh | null = $state(null)
+  let spark: SparkRenderer | null = null
+  let mesh: SplatMesh | null = null
 
   onMount(() => {
-    // Create SparkRenderer
+    // Create SparkRenderer — added imperatively to the scene
     spark = new SparkRenderer(sparkOptions)
-    scene.add(spark!)
+    scene.add(spark)
 
-    // Create SplatMesh
+    // Create SplatMesh — added imperatively to the scene
     if (url) {
       mesh = new SplatMesh({
         url,
         paged: true,
         raycastable: false,
       })
-      scene.add(mesh!)
+      scene.add(mesh)
     }
   })
 
   onDestroy(() => {
+    // Remove from scene and dispose
+    mesh?.parent?.remove(mesh)
     mesh?.dispose()
+    spark?.parent?.remove(spark)
     spark?.dispose()
   })
 </script>
 
-<!-- SparkRenderer is added to scene imperatively; T is for SplatMesh -->
-{#if mesh}
-  <T is={mesh} />
-{/if}
+<!-- Both SparkRenderer and SplatMesh are added to the scene imperatively in onMount. -->

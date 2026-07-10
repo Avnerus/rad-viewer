@@ -85,12 +85,14 @@
     </form>
   </div>
 {:else}
-  <div class="viewer-container">
-    <div class="viewer-header">
-      <button class="back-btn" onclick={handleBack} aria-label="Go back">← Back</button>
-      <span class="url-label" title={activeUrl}>{activeUrl}</span>
-    </div>
+  <!-- Fixed UI overlay -->
+  <div class="viewer-header">
+    <button class="back-btn" onclick={handleBack} aria-label="Go back">← Back</button>
+    <span class="url-label" title={activeUrl}>{activeUrl}</span>
+  </div>
 
+  <!-- Fixed canvas stage -->
+  <div class="viewer-stage">
     <Canvas
       renderMode="always"
       dpr={profile.dpr}
@@ -113,4 +115,7 @@
       </div>
     {/if}
   </div>
+
+  <!-- Scroll spacer — in document flow, provides scroll height -->
+  <div class="scroll-spacer"></div>
 {/if}

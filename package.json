@@ -10,7 +10,7 @@
     "check": "svelte-check --config ./svelte.config.js --no-tsconfig --compiler-warnings \"state_referenced_locally:ignore\"",
     "lint": "eslint .",
     "test:unit": "vitest run",
-    "test:e2e": "playwright test",
+    "test:e2e": "cross-env VITE_E2E_STUB_SPARK=true playwright test",
     "test": "npm run test:unit && npm run test:e2e"
   },
   "devDependencies": {
@@ -20,6 +20,7 @@
     "@testing-library/svelte": "^5.2.4",
     "@types/jsdom": "^21.1.7",
     "@types/three": "^0.185.0",
+    "cross-env": "^10.1.0",
     "eslint": "^9.18.0",
     "eslint-plugin-svelte": "^2.46.0",
     "globals": "^15.14.0",

@@ -15,9 +15,13 @@
   }
 
   let { url, profile, onReady }: Props = $props()
-  let scrollTrackRef = $state<HTMLElement | null>(null)
   let scrollTrigger: { kill(): void } | null = null
   let loaded = $state(false)
+
+  // Camera debug state for e2e tests
+  let cameraProgress = $state(0)
+  let cameraPosition = $state<[number, number, number]>([...defaultPerspectivePose.position])
+  const fixedTarget: [number, number, number] = [...defaultPerspectivePose.target]
 
   const threlte = useThrelte()
   const cameraContext = useCamera()
@@ -45,16 +49,20 @@
     // Register GSAP ScrollTrigger
     gsap.registerPlugin(ScrollTrigger)
 
-    if (!scrollTrackRef) return
+    // Use the .scroll-spacer element (in document flow) as the trigger.
+    // It provides the scroll height (400vh) while the canvas stays fixed.
+    const spacer = document.querySelector<HTMLElement>('.scroll-spacer')
+    if (!spacer) return
 
-    // Create the ScrollTrigger
     scrollTrigger = ScrollTrigger.create({
-      trigger: scrollTrackRef,
+      trigger: spacer,
       start: 'top top',
       end: 'bottom bottom',
       scrub: true,
       onUpdate: (self) => {
+        cameraProgress = self.progress
         const pose = getCameraPose(self.progress, defaultPerspectivePose, defaultTopDownPose)
+        cameraPosition = [...pose.position]
         applyCameraPose(camera, pose)
       },
     })
@@ -72,9 +80,19 @@
   })
 </script>
 
-<div class="scroll-track" bind:this={scrollTrackRef}></div>
-
 <SparkSplats {url} {profile} />
+
+<!-- Visually hidden debug element for e2e tests -->
+<div
+  class="camera-debug"
+  data-testid="camera-state"
+  data-progress={cameraProgress.toFixed(3)}
+  data-x={cameraPosition[0].toFixed(3)}
+  data-y={cameraPosition[1].toFixed(3)}
+  data-z={cameraPosition[2].toFixed(3)}
+  data-target={fixedTarget.join(',')}
+  aria-hidden="true"
+></div>
 
 {#if !loaded}
   <div class="scroll-hint">Scroll to change view</div>

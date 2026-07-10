@@ -10,8 +10,7 @@ html,
 body,
 #app {
   width: 100%;
-  height: 100%;
-  overflow: hidden;
+  min-height: 100%;
 }
 
 body {
@@ -100,16 +99,21 @@ body {
   min-height: 1.2em;
 }
 
-/* Viewer container */
-.viewer-container {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
+/* Fixed stage keeps the canvas pinned to the viewport */
+.viewer-stage {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+}
+
+/* Scroll spacer — in document flow, provides scroll height */
+.scroll-spacer {
+  height: 400vh;
+  pointer-events: none;
 }
 
 .viewer-header {
-  position: absolute;
+  position: fixed;
   top: 0;
   left: 0;
   right: 0;
@@ -150,15 +154,23 @@ body {
   white-space: nowrap;
 }
 
-/* Scroll track for GSAP ScrollTrigger */
+/* Scroll track provides the scrollable height */
 .scroll-track {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 1px;
   height: 400vh;
-  z-index: 0;
   pointer-events: none;
+}
+
+/* Camera debug state — visually hidden, for e2e tests */
+.camera-debug {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* Scroll hint */
