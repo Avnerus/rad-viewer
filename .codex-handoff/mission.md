@@ -24,6 +24,15 @@ Use these references before implementing:
 - Threlte `<T>`: https://threlte.xyz/docs/reference/core/t/
 - GSAP ScrollTrigger: https://gsap.com/docs/v3/Plugins/ScrollTrigger/
 
+## Sample RAD URL for Testing
+Pi should use this RAD file as the concrete sample URL for local/manual testing, README examples, and the landing page placeholder or default value:
+
+```text
+https://storage.googleapis.com/forge-dev-public/asundqui/rad/260217/cozy-spaceship_2-lod.rad
+```
+
+Do not auto-load this file before the user clicks Start. For automated Playwright e2e, it is acceptable to submit this URL while using the Spark test stub described below so the test verifies app behavior without depending on a large remote asset or GPU-specific WebGL behavior.
+
 Important Spark details from the references:
 - Load a prebuilt streaming RAD with `new SplatMesh({ url: "./my-splats-lod.rad", paged: true })`.
 - RAD encodes the LOD tree, so `lod: true` is not needed for a RAD LOD file.
@@ -66,6 +75,7 @@ Create or update:
 3. Install dev/test dependencies for Svelte type checking, ESLint, Vitest, Testing Library, jsdom, and Playwright. Configure TypeScript verification and lint so `npm run check` and `npm run lint` are enforced and meaningful.
 4. Build the landing/start flow in `App.svelte`:
    - URL input accepts a RAD URL.
+   - Use the sample Cozy Spaceship RAD URL from this brief as the placeholder or initial value.
    - Start button validates and enters the viewer state.
    - Do not auto-load any heavy remote asset before the user starts.
    - Preserve/share the input URL in app state and optionally the query string for reloadability.
@@ -108,12 +118,13 @@ Create or update:
    - Unit tests for mobile/iOS profile limiting Spark/GPU options.
    - Unit tests for camera tween output at progress 0, 0.5, and 1, including fixed target.
    - Component-level test for the start flow if practical.
-   - One Playwright e2e test using Pi's `playwright-cli` skill. It should submit a RAD URL, start the viewer, assert the canvas/viewer is visible, scroll, and assert the camera debug state or visible state changes from perspective to top-down.
+   - One Playwright e2e test using Pi's `playwright-cli` skill. It should submit the sample Cozy Spaceship RAD URL from this brief, start the viewer, assert the canvas/viewer is visible, scroll, and assert the camera debug state or visible state changes from perspective to top-down.
 12. For e2e stability, avoid depending on a huge remote RAD or WebGL-heavy Spark load. If necessary, create a Vite test alias activated by `VITE_E2E_STUB_SPARK=true` that maps `@sparkjsdev/spark` to a small test stub exporting `SparkRenderer`, `SplatMesh`, and `isMobile`. The stub classes should extend `THREE.Object3D` enough for the app to mount. Do not use the stub in production builds.
 13. Update `README.md` with:
    - What rad-viewer does.
    - How to install/run/check/test.
    - How to provide a RAD URL.
+   - Include the sample Cozy Spaceship RAD URL from this brief.
    - Notes on CORS for remote RAD files and `.radc` chunks.
    - Mention that mobile GPU use is limited through Spark LOD, DPR, and renderer settings.
 14. Create `AGENTS.md` with fresh-session technical information:
@@ -224,6 +235,7 @@ ScrollTrigger.create({
 - The app is based on Threlte and renders through a Threlte `<Canvas>`.
 - A reusable Threlte component exists for Spark 2.x splats / RAD streaming.
 - The landing/start screen accepts a RAD URL and starts the viewer only after the button is used.
+- The landing/start screen uses the sample Cozy Spaceship RAD URL as a placeholder or initial value without auto-loading it.
 - RAD URL validation is implemented and unit-tested.
 - Spark `SplatMesh` uses `paged: true` for RAD streaming.
 - `SparkRenderer` receives mobile-conscious LOD/performance options and `pagedExtSplats: true`.
