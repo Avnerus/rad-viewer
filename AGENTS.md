@@ -38,10 +38,10 @@ A client-side Threlte/Svelte 5/TypeScript web app for viewing Spark 2.x streamin
 
 ## Scroll Layout
 
-The viewer uses a **fixed canvas + scrollable container** pattern:
-- `.viewer-container` has `min-height: 400vh` providing the scroll range.
-- `.viewer-stage` is `position: fixed; inset: 0` keeping the canvas pinned to the viewport.
-- `.scroll-track` inside `RadViewerScene.svelte` provides the ScrollTrigger trigger element.
+The viewer uses a **fixed canvas + scrollable document** pattern:
+- `<Canvas>` lives in `src/App.svelte` inside a `.viewer-stage` (`position: fixed; inset: 0`) that keeps it pinned to the viewport.
+- `.scroll-spacer` (400vh) lives in `src/App.svelte` in the normal document flow, providing the real scroll range.
+- `RadViewerScene.svelte` queries `.scroll-spacer` via `querySelector` as the ScrollTrigger trigger element.
 - Scrolling is real (`window.scrollY` changes), and ScrollTrigger progress drives the camera tween.
 
 ## ScrollTrigger Invariant
