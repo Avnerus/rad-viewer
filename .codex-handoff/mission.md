@@ -1,80 +1,172 @@
-# Follow-up Mission for Pi: Correct Handoff Docs and Status Metadata
+# Mission Brief for Pi: Declarative Splat Transform and Optional Free Navigation
 
 ## Objective
-The scroll/camera implementation fixes appear to be in place, but the fresh-session documentation and status report still contain inaccurate metadata. Correct those without changing viewer behavior unless a tiny cleanup is directly tied to the documentation mismatch.
+Update `rad-viewer` so Spark splat transforms are controlled declaratively through the Threlte-facing `<SparkSplats>` component API, then add one viewer checkbox that enables both mouse-driven camera panning/look and first-person keyboard navigation with `WASD` and arrow keys.
 
-## Verification Context
-Codex pulled the follow-up implementation as commit:
-
-```text
-18feb54 fix: tighten scroll interaction, camera debug state, and e2e verification
-```
-
-The implementation now appears to include:
-- Real scroll height through `.scroll-spacer`.
-- Fixed canvas through `.viewer-stage`.
-- ScrollTrigger querying `.scroll-spacer`.
-- Camera debug attributes for e2e verification.
-- `npm run test:e2e` using `cross-env VITE_E2E_STUB_SPARK=true`.
-- Imperative-only Spark object ownership in `SparkSplats.svelte`.
-
-However:
-- `.codex-handoff/status.md` says `Commit: 770cb84` and `Pushed: no`, which does not match the pulled Git state.
-- `AGENTS.md` says `.viewer-container` provides scroll range and `.scroll-track` inside `RadViewerScene.svelte` is the trigger. Actual code uses `.viewer-stage` in `App.svelte`, `.scroll-spacer` in `App.svelte`, and `RadViewerScene.svelte` queries `.scroll-spacer`.
-- `src/app.css` still has an unused `.scroll-track` rule; remove it if it is truly unused, or update docs if you intentionally keep it. Do not reintroduce a `.scroll-track` element unless there is a real reason.
+Current context observed by Codex:
+- `src/lib/components/SparkSplats.svelte` imperatively applies static splat positioning with `mesh.position.set(12, 1,17);`.
+- `src/lib/components/RadViewerScene.svelte` currently renders `<SparkSplats {url} {profile} />`.
+- `SparkRenderer` and `SplatMesh` are currently added imperatively to the Three scene.
+- There is an unrelated local `.gitignore` modification in the workspace adding `.vercel`; do not overwrite unrelated user work.
 
 ## Files Likely Involved
+- `src/lib/components/SparkSplats.svelte`
+- `src/lib/components/RadViewerScene.svelte`
+- `src/App.svelte` if the checkbox state should live at the app/viewer shell level
+- `src/app.css`
+- `src/lib/types.ts`
+- `src/lib/spark/cameraTween.ts` only if navigation mode needs camera pose helpers
+- `src/lib/spark/freeNavigation.ts` or similar new helper if useful
+- `tests/unit/*.test.ts`
+- `tests/e2e/rad-viewer.spec.ts`
 - `AGENTS.md`
-- `.codex-handoff/status.md`
-- `src/app.css` only if removing the unused `.scroll-track` rule
-- `README.md` only if you find the same stale selector documentation there
+- `README.md` if user-visible controls or commands change
+- `.codex-handoff/status.md` as the final report
 
-## Required Fixes
-1. Update `AGENTS.md` so the Scroll Layout section matches the actual code:
-   - `<Canvas>` lives in `src/App.svelte`.
-   - `.viewer-stage` is fixed and contains the canvas.
-   - `.scroll-spacer` lives in `src/App.svelte`, is in document flow, and provides the 400vh scroll range.
-   - `RadViewerScene.svelte` queries `.scroll-spacer` as the ScrollTrigger trigger.
-   - Do not mention `.viewer-container` or `.scroll-track` unless those selectors really exist in active code.
-2. Update `.codex-handoff/status.md` so it no longer claims the wrong commit or `Pushed: no`.
-   - Do not invent a future self-referential commit hash.
-   - It is acceptable to state that the verified implementation commit was `18feb54` and that this follow-up commit corrects handoff docs/status.
-   - Set push state accurately for the intended final state, e.g. `Pushed: yes, after final push`.
-3. If `.scroll-track` is unused, remove the unused CSS rule from `src/app.css`.
-4. Do not alter the scroll/camera/Spark behavior unless needed to remove an unused selector cleanly.
+## Required Implementation
+1. Move static splat positioning to declarative component props.
+   - Remove the hardcoded `mesh.position.set(12, 1,17);` from `SparkSplats.svelte`.
+   - Add typed props to `SparkSplats.svelte`, at minimum:
+     - `position?: [number, number, number]`
+     - optionally `rotation?: [number, number, number]`
+     - optionally `scale?: number | [number, number, number]`
+   - Keep the current static value by passing it declaratively from the parent:
+
+```svelte
+<SparkSplats
+  {url}
+  {profile}
+  position={[12, 1, 17]}
+/>
+```
+
+2. Prefer Threlte ownership for the `SplatMesh`.
+   - Keep `SparkRenderer` imperative. It is renderer infrastructure and should still be created with the real `renderer`, `pagedExtSplats: true`, and the device profile options.
+   - Wrap the `SplatMesh` with Threlte `<T is={mesh} ... />` so transforms are applied declaratively.
+   - Do not also call `scene.add(mesh)` when the mesh is rendered through `<T>`.
+   - Dispose the mesh on destroy. Ensure no duplicate scene membership and no leaked Spark objects.
+   - If Threlte `<T>` cannot safely own `SplatMesh`, document the blocker in status and still provide a declarative props API that applies transforms through a reactive effect.
+
+Critical shape:
+
+```svelte
+<script lang="ts">
+  import { T, useThrelte } from '@threlte/core'
+  import { onDestroy, onMount } from 'svelte'
+  import { SparkRenderer, SplatMesh } from '@sparkjsdev/spark'
+
+  let {
+    url,
+    profile,
+    position = [0, 0, 0],
+    rotation = [0, 0, 0],
+    scale = 1,
+  } = $props()
+
+  const { renderer, scene } = useThrelte()
+  let spark: SparkRenderer | null = null
+  let mesh: SplatMesh | null = $state(null)
+
+  onMount(() => {
+    spark = new SparkRenderer({
+      renderer,
+      pagedExtSplats: true,
+      ...profile.sparkRenderer,
+    })
+    scene.add(spark)
+
+    mesh = new SplatMesh({
+      url,
+      paged: true,
+      raycastable: false,
+    })
+  })
+
+  onDestroy(() => {
+    mesh?.dispose()
+    spark?.parent?.remove(spark)
+    spark?.dispose()
+  })
+</script>
+
+{#if mesh}
+  <T is={mesh} {position} {rotation} {scale} />
+{/if}
+```
+
+3. Add one checkbox that enables both mouse panning/look and first-person keyboard movement.
+   - Add a single user-facing checkbox, for example "Free navigation".
+   - When unchecked, preserve the current scroll-driven camera tween behavior.
+   - When checked:
+     - Enable mouse-movement camera panning/look in the canvas/viewer area.
+     - Enable first-person keyboard movement with `W`, `A`, `S`, `D` and arrow keys.
+     - Use a single checkbox state for both mouse and keyboard behavior. Do not add separate toggles.
+     - Avoid fighting the existing ScrollTrigger camera tween. A reasonable approach is to disable/ignore ScrollTrigger camera updates while free navigation is enabled, then restore the scroll pose when disabled.
+     - Do not require pointer lock unless you decide it is necessary; if used, make the interaction and tests robust.
+     - Prevent keyboard handling from interfering with typing in form controls.
+   - Use small, deterministic movement constants and clamp pitch to avoid camera flips.
+
+4. Keep camera target behavior clear.
+   - Scroll mode must still tween from perspective to top-down and keep the fixed lookAt center.
+   - Free navigation mode may use yaw/pitch orientation and should not be constrained to the center lookAt target while enabled.
+   - When returning to scroll mode, re-apply the current ScrollTrigger pose or the closest valid scroll pose so the camera is not left in a free-navigation orientation.
+
+5. Update tests.
+   - Add or update unit tests for transform prop helpers if you extract helper logic.
+   - Add unit tests for free-navigation math if movement/yaw/pitch logic is extracted.
+   - Update Playwright e2e to verify:
+     - the checkbox exists as one control;
+     - enabling it allows keyboard movement to change camera debug state;
+     - mouse movement path is at least smoke-tested if feasible with Playwright;
+     - disabling it restores scroll-driven behavior.
+   - Existing scroll e2e must continue to assert camera progress/position changes in scroll mode.
+
+6. Update docs.
+   - Update `AGENTS.md` with the current architecture:
+     - `SparkRenderer` remains imperative.
+     - `SplatMesh` is owned by Threlte `<T>` if implemented that way.
+     - `<SparkSplats>` accepts transform props such as `position`.
+     - The one "Free navigation" checkbox enables both mouse panning/look and WASD/arrow movement.
+   - Update `README.md` with the checkbox behavior if user-facing controls are described there.
 
 ## Constraints
-- Do not rework the implementation.
-- Do not change the sample RAD URL.
-- Do not add Theatre.js.
-- Do not add assets.
-- Do not weaken TypeScript, lint, or tests.
-- Do not run more modifications or verification after pushing.
+- Do not remove the sample RAD URL.
+- Do not add Theatre.js, `@threlte/theatre`, or `@threlte/studio`.
+- Do not add large assets.
+- Do not make e2e depend on loading the real remote RAD file; keep the Spark stub path working.
+- Do not weaken TypeScript, lint, or test coverage to pass.
+- Do not overwrite unrelated local/user changes such as the existing `.gitignore` modification.
+- Do not rework the app styling beyond what the checkbox/navigation affordance requires.
 
 ## Acceptance Criteria
-- `AGENTS.md` accurately describes the current scroll layout and ScrollTrigger trigger selector.
-- `.codex-handoff/status.md` no longer reports `770cb84` as the pushed commit or `Pushed: no`.
-- No stale `.scroll-track` documentation remains unless `.scroll-track` is active code.
-- If `.scroll-track` CSS was unused, it is removed.
-- Viewer behavior remains unchanged.
-- Final report explains this was a documentation/status correction follow-up.
+- The hardcoded `mesh.position.set(12, 1,17);` is removed.
+- The same splat offset is preserved declaratively via `<SparkSplats position={[12, 1, 17]} />` or an equivalent typed prop.
+- `SplatMesh` is owned by Threlte `<T>` with declarative transform props, unless a documented technical blocker requires an imperative fallback.
+- `SparkRenderer` remains configured with `pagedExtSplats: true`, mobile-conscious profile options, and the real Threlte/Three renderer.
+- No duplicate scene-add path exists for the same `SplatMesh`.
+- One checkbox controls both mouse panning/look and WASD/arrow first-person navigation.
+- Scroll camera tween still works when the checkbox is off.
+- Free navigation changes camera state when the checkbox is on.
+- Keyboard listeners ignore form inputs and are cleaned up on destroy.
+- Tests cover the new declarative transform API and the one-checkbox free-navigation behavior.
+- `AGENTS.md` and README are updated where relevant.
 
 ## Tests to Run
-Because this should be documentation/status-only plus optional unused CSS removal:
+Run these before finalizing:
 - `npm run check`
 - `npm run lint`
-- `npm run build`
-
-If you touch tests or runtime TypeScript/Svelte logic, also run:
 - `npm run test:unit`
 - `npm run test:e2e`
+- `npm run build`
 
-No new tests are needed unless you change runtime behavior.
+Create new tests for new transform/navigation functionality; do not only rely on existing tests.
 
 ## Things Pi Must Not Change
 - Do not remove `.codex-handoff/mission.md`.
 - Do not overwrite unrelated user work.
-- Do not modify the core scroll/camera implementation unless directly required for the selector cleanup above.
+- Do not change `.gitignore` unless directly asked by the user.
+- Do not remove or weaken the existing scroll-driven camera interaction.
+- Do not add separate controls for mouse panning and keyboard navigation; use one checkbox.
 - Do not push without `status.md`.
 - Always write `status.md` as the last file modification before committing/pushing.
 - After pushing, do not perform any more verifications or modifications.
@@ -96,22 +188,22 @@ Write `.codex-handoff/status.md` with:
 
 ## Acceptance Criteria
 - [x] ...
+- [ ] ... (only if incomplete; explain blocker)
 
 ## Tests Run
 - `npm run check` - result
 - `npm run lint` - result
+- `npm run test:unit` - result
+- `npm run test:e2e` - result
 - `npm run build` - result
-- `npm run test:unit` - result, if run
-- `npm run test:e2e` - result, if run
 
 ## Known Issues / Follow-ups
 - ...
 
 ## Commit / Push
 - Branch:
-- Verified implementation commit: 18feb54
-- Status/docs correction commit: final commit containing this report
-- Pushed: yes, after final push
+- Commit:
+- Pushed: yes/no
 ```
 
-Before writing the report, re-check that all items in Acceptance Criteria are met. Always write `status.md` as the last file modification before committing and pushing.
+Before writing the report, re-check that all items in Acceptance Criteria are met. Always write `status.md` as the last action before pushing, then push. After pushing, do not perform any more verifications or modifications.
