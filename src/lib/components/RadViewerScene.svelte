@@ -7,7 +7,9 @@
   import { getCameraPose, applyCameraPose, defaultPerspectivePose, defaultTopDownPose } from '$lib/spark/cameraTween'
   import {
     applyMovement,
-    applyLookAt,
+    applyLook,
+    updateLookAngles,
+    applyZoom,
     extractYawPitch,
     computeMoveDirection,
     shouldHandleKeyEvent,
@@ -31,6 +33,9 @@
   // Camera debug state for e2e tests
   let cameraProgress = $state(0)
   let cameraPosition = $state<[number, number, number]>([...defaultPerspectivePose.position])
+  let cameraYaw = $state(0)
+  let cameraPitch = $state(0)
+  let cameraZoom = $state(60) // default FOV
   const fixedTarget: [number, number, number] = [...defaultPerspectivePose.target]
 
   const threlte = useThrelte()
@@ -52,7 +57,7 @@
   // Free navigation state
   let navYaw = $state(0)
   let navPitch = $state(0)
-  let pressedKeys = $state(new Set<string>())
+  let pressedKeys = new Set<string>()
   let lastMouseX = $state(0)
   let lastMouseY = $state(0)
   let lastTime = $state(0)
@@ -70,6 +75,9 @@
       // Entering free nav
       freeNavActive = true
       ;[navYaw, navPitch] = extractYawPitch(camera)
+      cameraYaw = navYaw
+      cameraPitch = navPitch
+      cameraZoom = camera.fov
       if (scrollTrigger) {
         scrollTrigger.kill()
         scrollTrigger = null
@@ -106,6 +114,9 @@
     // Mouse move listener on the document (works when canvas is focused)
     document.addEventListener('mousemove', handleMouseMove)
 
+    // Mouse wheel listener for zoom in free nav mode
+    document.addEventListener('wheel', handleWheel, { passive: false })
+
     // Start the free-navigation render loop
     lastTime = performance.now()
     rafId = requestAnimationFrame(freeNavLoop)
@@ -123,6 +134,7 @@
     window.removeEventListener('keydown', handleKeyDown)
     window.removeEventListener('keyup', handleKeyUp)
     document.removeEventListener('mousemove', handleMouseMove)
+    document.removeEventListener('wheel', handleWheel)
     if (rafId !== null) {
       cancelAnimationFrame(rafId)
     }
@@ -156,6 +168,9 @@
     } else {
       applyCameraPose(camera, defaultPerspectivePose)
     }
+    // Reset FOV to default on exit
+    camera.fov = 60
+    camera.updateProjectionMatrix()
   }
 
   function recreateScrollTrigger() {
@@ -187,22 +202,36 @@
     const deltaYaw = -dx * DEFAULT_FREE_NAV_CONFIG.mouseSensitivity
     const deltaPitch = -dy * DEFAULT_FREE_NAV_CONFIG.mouseSensitivity
 
-    navPitch = applyLookAt(
-      camera,
+    // Update cumulative yaw and pitch using the new pure-math helper
+    ;[navYaw, navPitch] = updateLookAngles(
+      navYaw,
+      navPitch,
       deltaYaw,
       deltaPitch,
-      navPitch,
-      DEFAULT_FREE_NAV_CONFIG.maxPitch,
       DEFAULT_FREE_NAV_CONFIG.minPitch,
+      DEFAULT_FREE_NAV_CONFIG.maxPitch,
     )
-    navYaw += deltaYaw
+
+    // Apply absolute yaw/pitch to the camera
+    applyLook(camera, navYaw, navPitch)
 
     // Update debug state
-    cameraPosition = [
-      camera.position.x,
-      camera.position.y,
-      camera.position.z,
-    ]
+    cameraYaw = navYaw
+    cameraPitch = navPitch
+  }
+
+  function handleWheel(e: WheelEvent) {
+    if (!freeNavActive) return
+    e.preventDefault()
+
+    const newFov = applyZoom(
+      camera,
+      e.deltaY,
+      DEFAULT_FREE_NAV_CONFIG.zoomSensitivity,
+      DEFAULT_FREE_NAV_CONFIG.minFov,
+      DEFAULT_FREE_NAV_CONFIG.maxFov,
+    )
+    cameraZoom = newFov
   }
 
   function freeNavLoop(time: number) {
@@ -251,6 +280,9 @@
   data-z={cameraPosition[2].toFixed(3)}
   data-target={fixedTarget.join(',')}
   data-freenav={freeNavActive ? 'true' : 'false'}
+  data-yaw={cameraYaw.toFixed(4)}
+  data-pitch={cameraPitch.toFixed(4)}
+  data-zoom={cameraZoom.toFixed(2)}
   aria-hidden="true"
 ></div>
 

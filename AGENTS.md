@@ -59,23 +59,29 @@ ScrollTrigger is created in `RadViewerScene.svelte` `onMount`, killed on `onDest
 - `data-x`, `data-y`, `data-z` — Camera position
 - `data-target` — Fixed lookAt target
 - `data-freenav` — `"true"` when free navigation is active, `"false"` otherwise
+- `data-yaw` — Current yaw angle in radians (free nav mode)
+- `data-pitch` — Current pitch angle in radians (free nav mode)
+- `data-zoom` — Current camera FOV in degrees (free nav mode)
 
 Used by e2e tests to verify camera movement. Not visible to users.
 
 ## Free Navigation
 
-A single "Free navigation" checkbox (rendered in `App.svelte`, outside `<Canvas>`) toggles both mouse-driven camera look and first-person keyboard movement:
+A single "Free navigation" checkbox (rendered in `App.svelte`, outside `<Canvas>`) toggles mouse-driven camera look, first-person keyboard movement, and scroll-wheel zoom:
 
 - **Unchecked (default)**: Scroll-driven camera tween via ScrollTrigger (perspective → top-down).
-- **Checked**: ScrollTrigger is killed. Mouse movement controls yaw/pitch. `WASD` and arrow keys move the camera in first-person mode. Keyboard events ignore form inputs (`<input>`, `<textarea>`, contenteditable).
-- **Exiting free nav**: Camera is restored to the last scroll-driven pose, and ScrollTrigger is re-created.
+- **Checked**: ScrollTrigger is killed. Mouse movement controls yaw/pitch. `WASD` and arrow keys move the camera in first-person mode. Mouse scroll wheel zooms the camera FOV (clamped to `minFov`/`maxFov`). Keyboard events ignore text-input elements but allow checkboxes/radios.
+- **Exiting free nav**: Camera is restored to the last scroll-driven pose, FOV resets to 60°, and ScrollTrigger is re-created.
+- **Checkbox focus**: The checkbox uses `tabindex="-1"` and `onblur` to return focus to `<body>`, preventing it from intercepting keyboard navigation.
 
 Movement logic is extracted into pure functions in `src/lib/spark/freeNavigation.ts`:
 - `computeMoveDirection(keys)` — normalised direction from key state
 - `applyMovement(camera, direction, yaw, dt, speed)` — frame-rate-independent movement
-- `applyLookAt(camera, deltaYaw, deltaPitch, currentPitch, maxPitch, minPitch)` — yaw/pitch with clamping
+- `updateLookAngles(currentYaw, currentPitch, deltaYaw, deltaPitch, minPitch, maxPitch)` — pure math returning cumulative `[yaw, pitch]` with clamped pitch
+- `applyLook(camera, yaw, pitch)` — applies absolute yaw/pitch to camera quaternion via YXZ Euler
+- `applyZoom(camera, scrollDelta, sensitivity, minFov, maxFov)` — clamped FOV adjustment from scroll delta
 - `extractYawPitch(camera)` — read current orientation
-- `shouldHandleKeyEvent(event)` — skip form inputs
+- `shouldHandleKeyEvent(event)` — skip text inputs, allow checkboxes/radios
 - `isNavKey(key)` — check if key is WASD/arrow
 
 The `freeNavEnabled` state lives in `App.svelte` and is passed as a prop to `RadViewerScene`. The scene uses a `$effect` to react to changes, managing internal `freeNavActive` state, ScrollTrigger lifecycle, and the `requestAnimationFrame` movement loop.

@@ -13,6 +13,12 @@ export interface FreeNavConfig {
   maxPitch: number
   /** Minimum pitch angle in radians */
   minPitch: number
+  /** Scroll zoom sensitivity (FOV change per scroll tick) */
+  zoomSensitivity: number
+  /** Minimum camera FOV (zoomed in) */
+  minFov: number
+  /** Maximum camera FOV (zoomed out) */
+  maxFov: number
 }
 
 /**
@@ -23,6 +29,9 @@ export const DEFAULT_FREE_NAV_CONFIG: FreeNavConfig = {
   mouseSensitivity: 0.002,
   maxPitch: Math.PI / 2 - 0.01,
   minPitch: -Math.PI / 2 + 0.01,
+  zoomSensitivity: 3,
+  minFov: 10,
+  maxFov: 90,
 }
 
 /**
@@ -32,18 +41,31 @@ export const NAV_KEYS = new Set(['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'ar
 
 /**
  * Check whether a key event should be handled by free navigation.
- * Ignores form inputs, textareas, and contenteditable elements.
+ * Ignores text-input form elements (text inputs, textareas, contenteditable).
+ * Allows checkboxes, radio buttons, and non-form targets.
  */
 export function shouldHandleKeyEvent(event: KeyboardEvent): boolean {
   const target = event.target as HTMLElement | null
   if (!target) return false
   // Allow window/document targets (e.g. when no element has focus)
   if (target === window || target === document) return true
-  const tag = (target as HTMLElement).tagName
+  const el = target as HTMLElement
+  const tag = el.tagName
   if (!tag) return true // non-element nodes are safe
   const tagLower = tag.toLowerCase()
-  if (tagLower === 'input' || tagLower === 'textarea') return false
-  if ((target as HTMLElement).isContentEditable) return false
+
+  // Block text-input elements only
+  if (tagLower === 'textarea') return false
+  if (tagLower === 'input') {
+    const inputType = ((target as Node as HTMLInputElement).type || 'text').toLowerCase()
+    // Allow checkbox, radio, and non-text input types
+    if (inputType === 'checkbox' || inputType === 'radio') return true
+    // Block text-like inputs
+    if (['text', 'password', 'search', 'email', 'url', 'tel', 'number', ''].includes(inputType)) return false
+    // Allow other types (range, color, date, file, etc.)
+    return true
+  }
+  if (el.isContentEditable) return false
   return true
 }
 
@@ -113,39 +135,47 @@ export function applyMovement(
 }
 
 /**
- * Apply yaw and pitch deltas to the camera orientation.
- * Uses a yaw-pitch convention: yaw rotates around world Y axis,
+ * Update yaw and pitch angles from deltas.
+ * Pure math: takes current angles and deltas, returns new clamped angles.
+ *
+ * @param currentYaw Current yaw in radians.
+ * @param currentPitch Current pitch in radians.
+ * @param deltaYaw Change in yaw in radians.
+ * @param deltaPitch Change in pitch in radians.
+ * @param minPitch Minimum allowed pitch (clamped).
+ * @param maxPitch Maximum allowed pitch (clamped).
+ * @returns [newYaw, newPitch] with pitch clamped.
+ */
+export function updateLookAngles(
+  currentYaw: number,
+  currentPitch: number,
+  deltaYaw: number,
+  deltaPitch: number,
+  minPitch: number,
+  maxPitch: number,
+): [number, number] {
+  const newYaw = currentYaw + deltaYaw
+  let newPitch = currentPitch + deltaPitch
+  newPitch = Math.max(minPitch, Math.min(maxPitch, newPitch))
+  return [newYaw, newPitch]
+}
+
+/**
+ * Apply absolute yaw and pitch to the camera orientation.
+ * Uses YXZ Euler order: yaw rotates around world Y axis,
  * pitch rotates around the camera's local X axis.
  *
  * @param camera The Three.js camera.
- * @param deltaYaw Change in yaw in radians.
- * @param deltaPitch Change in pitch in radians.
- * @param currentPitch Current pitch angle (clamped internally).
- * @param maxPitch Maximum allowed pitch.
- * @param minPitch Minimum allowed pitch.
- * @returns Updated pitch angle after clamping.
+ * @param yaw Absolute yaw angle in radians.
+ * @param pitch Absolute pitch angle in radians.
  */
-export function applyLookAt(
+export function applyLook(
   camera: PerspectiveCamera,
-  deltaYaw: number,
-  deltaPitch: number,
-  currentPitch: number,
-  maxPitch: number,
-  minPitch: number,
-): number {
-  let newPitch = currentPitch + deltaPitch
-  newPitch = Math.max(minPitch, Math.min(maxPitch, newPitch))
-
-  // Build orientation from yaw + pitch
-  // We use the camera's current yaw by extracting it from the quaternion
-  const euler = new Euler(0, 0, 0, 'YXZ')
-  euler.y += deltaYaw
-  euler.x = newPitch
-
-  const quaternion = new Quaternion().setFromEuler(euler)
-  camera.quaternion.copy(quaternion)
-
-  return newPitch
+  yaw: number,
+  pitch: number,
+): void {
+  const euler = new Euler(pitch, yaw, 0, 'YXZ')
+  camera.quaternion.copy(new Quaternion().setFromEuler(euler))
 }
 
 /**
@@ -160,4 +190,30 @@ export function extractYawPitch(camera: PerspectiveCamera): [number, number] {
   const euler = new Euler(0, 0, 0, 'YXZ')
   euler.setFromQuaternion(camera.quaternion)
   return [euler.y, euler.x]
+}
+
+/**
+ * Apply scroll-wheel zoom to the camera FOV.
+ * Positive delta (scroll down) zooms out (increases FOV).
+ * Negative delta (scroll up) zooms in (decreases FOV).
+ *
+ * @param camera The Three.js PerspectiveCamera.
+ * @param scrollDelta Mouse wheel delta (negative = scroll up / zoom in).
+ * @param sensitivity FOV change per unit of scroll delta.
+ * @param minFov Minimum FOV in degrees (most zoomed in).
+ * @param maxFov Maximum FOV in degrees (most zoomed out).
+ * @returns The new clamped FOV value.
+ */
+export function applyZoom(
+  camera: PerspectiveCamera,
+  scrollDelta: number,
+  sensitivity: number,
+  minFov: number,
+  maxFov: number,
+): number {
+  const newFov = camera.fov - scrollDelta * sensitivity
+  const clamped = Math.max(minFov, Math.min(maxFov, newFov))
+  camera.fov = clamped
+  camera.updateProjectionMatrix()
+  return clamped
 }

@@ -1,58 +1,52 @@
 # Status Report
 
 ## Summary
-Implemented declarative splat transform props on `<SparkSplats>` and added a single "Free navigation" checkbox that enables both mouse-driven camera look and first-person WASD/arrow keyboard movement. All acceptance criteria met.
+Follow-up mission completed. Fixed three bugs in free navigation and added scroll-to-zoom:
 
-Key changes:
-- Removed hardcoded `mesh.position.set(12, 1, 17)` from `SparkSplats.svelte`
-- `SplatMesh` is now owned by Threlte `<T is={mesh} {position} {rotation} {scale} />` for declarative transforms
-- `SparkRenderer` remains imperative (renderer infrastructure)
-- Single checkbox in `App.svelte` (outside `<Canvas>`) toggles free navigation
-- Free navigation logic extracted into pure, unit-testable functions in `freeNavigation.ts`
-- ScrollTrigger is killed on free nav entry, re-created on exit with camera restored to last scroll pose
+1. **Keyboard navigation broken in browser** — `shouldHandleKeyEvent` blocked all `<input>` elements, including the free-nav checkbox itself. After clicking the checkbox, it retained focus and all WASD keys were silently ignored. Fixed by filtering only text-input types (`text`, `password`, `search`, `email`, `url`, `tel`, `number`) while allowing `checkbox` and `radio`. Also added `tabindex="-1"` and `onblur` on the checkbox to return focus to `<body>`.
+
+2. **Mouse-look yaw not accumulating** — `applyLookAt()` created a fresh `Euler(0,0,0)` each call and applied only the current `deltaYaw`, ignoring cumulative yaw. Replaced with two clean functions: `updateLookAngles()` (pure math returning cumulative `[yaw, pitch]` with clamped pitch) and `applyLook()` (applies absolute yaw/pitch to camera quaternion via YXZ Euler).
+
+3. **Scroll-to-zoom** — Added `applyZoom()` helper and `wheel` event listener. Positive `deltaY` (scroll down) decreases FOV (zoom in), negative increases FOV (zoom out). Clamped to `minFov`/`maxFov` (10°–90°). FOV resets to 60° on free nav exit.
 
 ## Files Changed
-- `src/lib/components/SparkSplats.svelte` — Declarative transform props (`position`, `rotation`, `scale`), `<T>` ownership of SplatMesh
-- `src/lib/components/RadViewerScene.svelte` — Receives `freeNavEnabled` prop, `$effect` for mode switching, keyboard/mouse handlers, rAF movement loop
-- `src/App.svelte` — Owns `freeNavEnabled` state, renders checkbox outside `<Canvas>`, passes prop to RadViewerScene
-- `src/lib/spark/freeNavigation.ts` — New: pure functions for movement, yaw/pitch, key handling
-- `src/app.css` — Styles for `.free-nav-toggle`, `.free-nav-label`, `.free-nav-checkbox`, `.free-nav-hint`
-- `tests/unit/freeNavigation.test.ts` — New: 26 unit tests for free navigation math
-- `tests/e2e/rad-viewer.spec.ts` — Added 6 free navigation e2e tests, updated existing tests
-- `AGENTS.md` — Updated architecture docs with new files, Threlte `<T>` ownership, free navigation section
-- `README.md` — Added free navigation to features and usage instructions
+- `src/lib/spark/freeNavigation.ts` — Fixed `shouldHandleKeyEvent` for checkbox/radio; replaced `applyLookAt` with `updateLookAngles` + `applyLook`; added `applyZoom`; added `zoomSensitivity`, `minFov`, `maxFov` to config
+- `src/lib/components/RadViewerScene.svelte` — Uses new `updateLookAngles`/`applyLook` API; added `handleWheel` for zoom; added `data-yaw`, `data-pitch`, `data-zoom` debug attributes; FOV reset on exit
+- `src/App.svelte` — Added `tabindex="-1"` and `onblur` to checkbox; updated hint text
+- `tests/unit/freeNavigation.test.ts` — 37 tests: checkbox/radio filtering, yaw accumulation, pitch clamping, zoom clamping, identity quaternion
+- `tests/e2e/rad-viewer.spec.ts` — 15 tests: mouse yaw/pitch verification, zoom in/out, zoom disabled when free nav off
+- `AGENTS.md` — Updated free navigation section with zoom, new function signatures, checkbox focus handling
+- `README.md` — Updated feature list and usage instructions
 
 ## Implementation Notes
-- The free navigation checkbox lives in `App.svelte` (outside `<Canvas>`) so it renders as normal HTML. State is passed as a prop to `RadViewerScene`.
-- `RadViewerScene` uses a `$effect` on the `freeNavEnabled` prop to manage internal `freeNavActive` state, ScrollTrigger lifecycle, and yaw/pitch initialization.
-- `shouldHandleKeyEvent` handles `window`/`document` targets (no focused element) in addition to regular HTML elements, preventing false negatives when keyboard events dispatch at the window level.
-- The `requestAnimationFrame` loop runs continuously but only processes movement when `freeNavActive` is `true`.
+- The `updateLookAngles`/`applyLook` split follows the pattern suggested in the mission brief: pure math for angle updates, separate function for camera application. This keeps yaw/pitch fully cumulative and testable.
+- The `applyZoom` formula is `newFov = camera.fov - scrollDelta * sensitivity`. Positive `deltaY` (scroll down toward bottom of page) decreases FOV (zoom in). Negative `deltaY` (scroll up) increases FOV (zoom out). This matches the convention where scrolling "toward" content zooms in.
+- The `pressedKeys` Set is no longer wrapped in `$state()` — it's a plain Set mutated directly, which avoids any Svelte proxy overhead in the hot rAF path.
 
 ## Acceptance Criteria
-- [x] The hardcoded `mesh.position.set(12, 1, 17);` is removed.
-- [x] The same splat offset is preserved declaratively via `<SparkSplats position={[12, 1, 17]} />`.
-- [x] `SplatMesh` is owned by Threlte `<T>` with declarative transform props.
-- [x] `SparkRenderer` remains configured with `pagedExtSplats: true`, mobile-conscious profile options, and the real Threlte/Three renderer.
-- [x] No duplicate scene-add path exists for the same `SplatMesh`.
-- [x] One checkbox controls both mouse panning/look and WASD/arrow first-person navigation.
-- [x] Scroll camera tween still works when the checkbox is off.
-- [x] Free navigation changes camera state when the checkbox is on.
-- [x] Keyboard listeners ignore form inputs and are cleaned up on destroy.
-- [x] Tests cover the new declarative transform API and the one-checkbox free-navigation behavior.
-- [x] `AGENTS.md` and README are updated where relevant.
+- [x] Mouse-look yaw accumulates correctly across repeated mouse movement
+- [x] Pitch remains clamped
+- [x] Keyboard movement uses the same yaw orientation that mouse look applies
+- [x] E2E verifies mouse movement changes orientation state (yaw/pitch), not only that free nav remains enabled
+- [x] Existing e2e still verifies keyboard movement changes camera position when free nav is enabled
+- [x] Existing e2e still verifies scroll-driven camera tween works when free nav is disabled
+- [x] Tests cover the updated free-navigation math (37 unit tests, 15 e2e tests)
+- [x] Scroll-to-zoom added and tested
+- [x] Status report metadata is accurate
 
 ## Tests Run
 - `npm run check` - 0 errors, 0 warnings
 - `npm run lint` - clean (0 errors, 0 warnings)
-- `npm run test:unit` - 53 tests passed (4 test files)
-- `npm run test:e2e` - 13 tests passed (all existing + 6 new free nav tests)
+- `npm run test:unit` - 64 tests passed (4 test files)
+- `npm run test:e2e` - 15 tests passed
 - `npm run build` - built successfully
 
 ## Known Issues / Follow-ups
 - The `state_referenced_locally` Svelte compiler warnings in `SparkSplats.svelte` (about `profile.sparkRenderer.*` references) are pre-existing and suppressed in the `svelte-check` config. They are harmless because the SparkRenderer options are built once in `onMount` and never change.
-- The free navigation mouse look uses document-level `mousemove` events rather than pointer lock. This works well but means mouse look is active whenever free nav is on (even when mouse leaves the canvas area).
+- No transform-prop e2e test was added. The Spark stub `SplatMesh` extends `THREE.Object3D` but Threlte's `<T>` component internals are not easily accessible from e2e without brittle DOM probing. The declarative transform API is verified through TypeScript type checking (`npm run check`) and the unit test coverage of the component's prop defaults.
 
 ## Commit / Push
 - Branch: main
-- Commit: 7a1ec95
+- Verified prior implementation commit: 22a0f84
+- Follow-up commit: 5b33240
 - Pushed: no (pending)

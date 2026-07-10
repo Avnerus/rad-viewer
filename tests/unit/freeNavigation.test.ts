@@ -4,7 +4,9 @@ import {
   isNavKey,
   shouldHandleKeyEvent,
   applyMovement,
-  applyLookAt,
+  applyLook,
+  updateLookAngles,
+  applyZoom,
   extractYawPitch,
   NAV_KEYS,
   DEFAULT_FREE_NAV_CONFIG,
@@ -52,12 +54,43 @@ describe('isNavKey', () => {
 })
 
 describe('shouldHandleKeyEvent', () => {
-  it('returns false for input elements', () => {
+  it('returns false for text input elements', () => {
     const input = document.createElement('input')
+    input.type = 'text'
     document.body.appendChild(input)
     const event = new KeyboardEvent('keydown', { key: 'w' })
     Object.defineProperty(event, 'target', { value: input })
     expect(shouldHandleKeyEvent(event)).toBe(false)
+    document.body.removeChild(input)
+  })
+
+  it('returns false for password input elements', () => {
+    const input = document.createElement('input')
+    input.type = 'password'
+    document.body.appendChild(input)
+    const event = new KeyboardEvent('keydown', { key: 'w' })
+    Object.defineProperty(event, 'target', { value: input })
+    expect(shouldHandleKeyEvent(event)).toBe(false)
+    document.body.removeChild(input)
+  })
+
+  it('returns true for checkbox input elements', () => {
+    const input = document.createElement('input')
+    input.type = 'checkbox'
+    document.body.appendChild(input)
+    const event = new KeyboardEvent('keydown', { key: 'w' })
+    Object.defineProperty(event, 'target', { value: input })
+    expect(shouldHandleKeyEvent(event)).toBe(true)
+    document.body.removeChild(input)
+  })
+
+  it('returns true for radio input elements', () => {
+    const input = document.createElement('input')
+    input.type = 'radio'
+    document.body.appendChild(input)
+    const event = new KeyboardEvent('keydown', { key: 'w' })
+    Object.defineProperty(event, 'target', { value: input })
+    expect(shouldHandleKeyEvent(event)).toBe(true)
     document.body.removeChild(input)
   })
 
@@ -195,37 +228,154 @@ describe('applyMovement', () => {
   })
 })
 
-describe('applyLookAt', () => {
-  it('clamps pitch to max', () => {
-    const camera = {
-      quaternion: { copy: vi.fn() },
-    } as unknown as Parameters<typeof applyLookAt>[0]
+describe('updateLookAngles', () => {
+  it('accumulates yaw across calls', () => {
+    let yaw = 0
+    let pitch = 0
 
-    const newPitch = applyLookAt(
-      camera,
-      0,
-      Math.PI, // large pitch up
-      0,
-      DEFAULT_FREE_NAV_CONFIG.maxPitch,
-      DEFAULT_FREE_NAV_CONFIG.minPitch,
-    )
-    expect(newPitch).toBeLessThanOrEqual(DEFAULT_FREE_NAV_CONFIG.maxPitch)
+    ;[yaw, pitch] = updateLookAngles(yaw, pitch, 0.5, 0, -1, 1)
+    expect(yaw).toBeCloseTo(0.5)
+
+    ;[yaw, pitch] = updateLookAngles(yaw, pitch, 0.3, 0, -1, 1)
+    expect(yaw).toBeCloseTo(0.8)
+
+    ;[yaw, pitch] = updateLookAngles(yaw, pitch, -0.2, 0, -1, 1)
+    expect(yaw).toBeCloseTo(0.6)
   })
 
-  it('clamps pitch to min', () => {
-    const camera = {
-      quaternion: { copy: vi.fn() },
-    } as unknown as Parameters<typeof applyLookAt>[0]
+  it('accumulates and clamps pitch', () => {
+    let yaw = 0
+    let pitch = 0
+    const maxPitch = Math.PI / 2 - 0.01
+    const minPitch = -Math.PI / 2 + 0.01
 
-    const newPitch = applyLookAt(
+    // Pitch up to max
+    ;[yaw, pitch] = updateLookAngles(yaw, pitch, 0, 1, minPitch, maxPitch)
+    expect(pitch).toBeCloseTo(1)
+
+    // Try to exceed max
+    ;[yaw, pitch] = updateLookAngles(yaw, pitch, 0, Math.PI, minPitch, maxPitch)
+    expect(pitch).toBeLessThanOrEqual(maxPitch)
+
+    // Reset and pitch down to min
+    pitch = 0
+    ;[yaw, pitch] = updateLookAngles(yaw, pitch, 0, -1, minPitch, maxPitch)
+    expect(pitch).toBeCloseTo(-1)
+
+    // Try to exceed min
+    ;[yaw, pitch] = updateLookAngles(yaw, pitch, 0, -Math.PI, minPitch, maxPitch)
+    expect(pitch).toBeGreaterThanOrEqual(minPitch)
+  })
+
+  it('handles simultaneous yaw and pitch deltas', () => {
+    let yaw = 0
+    let pitch = 0
+
+    ;[yaw, pitch] = updateLookAngles(yaw, pitch, 0.5, 0.3, -1, 1)
+    expect(yaw).toBeCloseTo(0.5)
+    expect(pitch).toBeCloseTo(0.3)
+  })
+})
+
+describe('applyLook', () => {
+  it('sets camera quaternion from yaw and pitch', () => {
+    const copyFn = vi.fn()
+    const camera = {
+      quaternion: { copy: copyFn },
+    } as unknown as Parameters<typeof applyLook>[0]
+
+    applyLook(camera, 0.5, 0.3)
+    expect(copyFn).toHaveBeenCalled()
+  })
+
+  it('applies identity for zero yaw and pitch', () => {
+    const camera = {
+      quaternion: {
+        _x: 0, _y: 0, _z: 0, _w: 0,
+        copy(q: { x: number; y: number; z: number; w: number }) {
+          this._x = q.x; this._y = q.y; this._z = q.z; this._w = q.w
+        },
+        get x() { return this._x },
+        get y() { return this._y },
+        get z() { return this._z },
+        get w() { return this._w },
+      },
+    } as unknown as Parameters<typeof applyLook>[0]
+
+    applyLook(camera, 0, 0)
+    // Identity quaternion: w=1, x=y=z=0
+    expect(camera.quaternion.w).toBeCloseTo(1)
+    expect(camera.quaternion.x).toBeCloseTo(0)
+    expect(camera.quaternion.y).toBeCloseTo(0)
+    expect(camera.quaternion.z).toBeCloseTo(0)
+  })
+})
+
+describe('applyZoom', () => {
+  it('increases FOV on negative delta (scroll up / zoom out)', () => {
+    const updateFn = vi.fn()
+    const camera = {
+      fov: 60,
+      updateProjectionMatrix: updateFn,
+    } as unknown as Parameters<typeof applyZoom>[0]
+
+    // newFov = 60 - (-10)*3 = 90
+    const newFov = applyZoom(camera, -10, 3, 10, 90)
+    expect(newFov).toBeCloseTo(90)
+    expect(updateFn).toHaveBeenCalled()
+  })
+
+  it('decreases FOV on positive delta (scroll down / zoom in)', () => {
+    const updateFn = vi.fn()
+    const camera = {
+      fov: 60,
+      updateProjectionMatrix: updateFn,
+    } as unknown as Parameters<typeof applyZoom>[0]
+
+    // newFov = 60 - 10*3 = 30
+    const newFov = applyZoom(camera, 10, 3, 10, 90)
+    expect(newFov).toBeCloseTo(30)
+    expect(updateFn).toHaveBeenCalled()
+  })
+
+  it('clamps to min FOV', () => {
+    const camera = {
+      fov: 15,
+      updateProjectionMatrix: vi.fn(),
+    } as unknown as Parameters<typeof applyZoom>[0]
+
+    // Large positive delta drives FOV way below min
+    // 15 - 100*3 = -285, clamped to 10
+    const newFov = applyZoom(camera, 100, 3, 10, 90)
+    expect(newFov).toBeCloseTo(10)
+  })
+
+  it('clamps to max FOV', () => {
+    const camera = {
+      fov: 85,
+      updateProjectionMatrix: vi.fn(),
+    } as unknown as Parameters<typeof applyZoom>[0]
+
+    const newFov = applyZoom(camera, -100, 3, 10, 90)
+    // 85 - (-100)*3 = 385, clamped to 90
+    expect(newFov).toBeCloseTo(90)
+  })
+
+  it('uses default config values', () => {
+    const camera = {
+      fov: 60,
+      updateProjectionMatrix: vi.fn(),
+    } as unknown as Parameters<typeof applyZoom>[0]
+
+    const newFov = applyZoom(
       camera,
-      0,
-      -Math.PI, // large pitch down
-      0,
-      DEFAULT_FREE_NAV_CONFIG.maxPitch,
-      DEFAULT_FREE_NAV_CONFIG.minPitch,
+      5,
+      DEFAULT_FREE_NAV_CONFIG.zoomSensitivity,
+      DEFAULT_FREE_NAV_CONFIG.minFov,
+      DEFAULT_FREE_NAV_CONFIG.maxFov,
     )
-    expect(newPitch).toBeGreaterThanOrEqual(DEFAULT_FREE_NAV_CONFIG.minPitch)
+    // 60 - 5*3 = 45
+    expect(newFov).toBeCloseTo(45)
   })
 })
 
@@ -257,5 +407,9 @@ describe('DEFAULT_FREE_NAV_CONFIG', () => {
     expect(DEFAULT_FREE_NAV_CONFIG.mouseSensitivity).toBeGreaterThan(0)
     expect(DEFAULT_FREE_NAV_CONFIG.maxPitch).toBeLessThan(Math.PI / 2)
     expect(DEFAULT_FREE_NAV_CONFIG.minPitch).toBeGreaterThan(-Math.PI / 2)
+    expect(DEFAULT_FREE_NAV_CONFIG.zoomSensitivity).toBeGreaterThan(0)
+    expect(DEFAULT_FREE_NAV_CONFIG.minFov).toBeGreaterThan(0)
+    expect(DEFAULT_FREE_NAV_CONFIG.maxFov).toBeLessThan(180)
+    expect(DEFAULT_FREE_NAV_CONFIG.minFov).toBeLessThan(DEFAULT_FREE_NAV_CONFIG.maxFov)
   })
 })

@@ -134,13 +134,15 @@
         type="checkbox"
         class="free-nav-checkbox"
         checked={freeNavEnabled}
+        tabindex={-1}
         onchange={handleFreeNavToggle}
+        onblur={() => document.body.focus()}
         aria-label="Free navigation"
       />
       Free navigation
     </label>
     {#if freeNavEnabled}
-      <span class="free-nav-hint">WASD / Arrows to move · Mouse to look</span>
+      <span class="free-nav-hint">WASD / Arrows to move · Mouse to look · Scroll to zoom</span>
     {/if}
   </div>
 

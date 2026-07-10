@@ -13,6 +13,9 @@ async function getCameraState(page: import('@playwright/test').Page) {
     z: parseFloat(await el.getAttribute('data-z') ?? '0'),
     target: await el.getAttribute('data-target'),
     freeNav: await el.getAttribute('data-freenav'),
+    yaw: parseFloat(await el.getAttribute('data-yaw') ?? '0'),
+    pitch: parseFloat(await el.getAttribute('data-pitch') ?? '0'),
+    zoom: parseFloat(await el.getAttribute('data-zoom') ?? '60'),
   }
 }
 
@@ -236,29 +239,87 @@ test.describe('Free Navigation', () => {
     expect(scrolledState.progress).toBeGreaterThan(0.5)
   })
 
-  test('mouse movement path smoke test', async ({ page }) => {
+  test('mouse movement changes camera yaw and pitch', async ({ page }) => {
     await startViewer(page)
 
     // Enable free navigation
     const checkbox = page.getByLabel('Free navigation')
     await checkbox.check()
-    await page.waitForTimeout(200)
+    await page.waitForTimeout(300)
 
-    // Move mouse in the canvas area
+    // Capture initial orientation
+    const stateBefore = await getCameraState(page)
+    expect(stateBefore.freeNav).toBe('true')
+
+    // Move mouse in the canvas area — right then down
     const canvas = page.locator('canvas')
     const box = await canvas.boundingBox()
     if (box) {
-      // Move to center of canvas
-      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+      const cx = box.x + box.width / 2
+      const cy = box.y + box.height / 2
+      // Move to center first
+      await page.mouse.move(cx, cy)
       await page.waitForTimeout(50)
-      // Then move right
-      await page.mouse.move(box.x + box.width / 2 + 100, box.y + box.height / 2)
-      await page.waitForTimeout(200)
+      // Then move right (should change yaw)
+      await page.mouse.move(cx + 150, cy)
+      await page.waitForTimeout(100)
+      // Then move down (should change pitch)
+      await page.mouse.move(cx + 150, cy + 100)
+      await page.waitForTimeout(100)
     }
 
-    // Camera orientation changed (yaw changed), reflected in position or debug state
-    // With stub, the quaternion change is applied. We check the free nav flag is still active.
     const stateAfter = await getCameraState(page)
     expect(stateAfter.freeNav).toBe('true')
+
+    // Yaw should have changed from the horizontal mouse movement
+    const yawChanged = Math.abs(stateAfter.yaw - stateBefore.yaw) > 0.01
+    // Pitch should have changed from the vertical mouse movement
+    const pitchChanged = Math.abs(stateAfter.pitch - stateBefore.pitch) > 0.01
+    expect(yawChanged || pitchChanged).toBe(true)
+  })
+
+  test('scroll wheel zoom changes camera FOV in free nav mode', async ({ page }) => {
+    await startViewer(page)
+
+    // Enable free navigation
+    const checkbox = page.getByLabel('Free navigation')
+    await checkbox.check()
+    await page.waitForTimeout(300)
+
+    const stateBefore = await getCameraState(page)
+    expect(stateBefore.freeNav).toBe('true')
+
+    // Dispatch a wheel event via evaluate to simulate scroll
+    await page.evaluate(() => {
+      const event = new WheelEvent('wheel', { deltaY: -200, bubbles: true })
+      document.dispatchEvent(event)
+    })
+    await page.waitForTimeout(200)
+
+    const stateAfter = await getCameraState(page)
+    // Zoom (FOV) should have changed
+    expect(stateAfter.zoom).not.toBeCloseTo(stateBefore.zoom, 1)
+    // Zoom should be within valid range
+    expect(stateAfter.zoom).toBeGreaterThanOrEqual(10)
+    expect(stateAfter.zoom).toBeLessThanOrEqual(90)
+  })
+
+  test('scroll wheel does not zoom when free nav is disabled', async ({ page }) => {
+    await startViewer(page)
+
+    // Free nav is off by default
+    const stateBefore = await getCameraState(page)
+    expect(stateBefore.freeNav).toBe('false')
+
+    // Dispatch wheel event — should not zoom when free nav is off
+    await page.evaluate(() => {
+      const event = new WheelEvent('wheel', { deltaY: -200, bubbles: true })
+      document.dispatchEvent(event)
+    })
+    await page.waitForTimeout(200)
+
+    const stateAfter = await getCameraState(page)
+    // Zoom should remain at default (60)
+    expect(stateAfter.zoom).toBeCloseTo(60, 0)
   })
 })
