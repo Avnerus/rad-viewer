@@ -1,52 +1,49 @@
 # Status Report
 
 ## Summary
-Follow-up mission completed. Fixed three bugs in free navigation and added scroll-to-zoom:
+Fixed three input semantics issues and replaced synthetic event dispatches with real Playwright input APIs:
 
-1. **Keyboard navigation broken in browser** — `shouldHandleKeyEvent` blocked all `<input>` elements, including the free-nav checkbox itself. After clicking the checkbox, it retained focus and all WASD keys were silently ignored. Fixed by filtering only text-input types (`text`, `password`, `search`, `email`, `url`, `tel`, `number`) while allowing `checkbox` and `radio`. Also added `tabindex="-1"` and `onblur` on the checkbox to return focus to `<body>`.
+1. **W/S and Arrow Up/Down were reversed** — `applyMovement` had an incorrect world-space rotation formula. At yaw=0, W produced `worldDz = +1` (moving camera in +Z / away from origin), when it should produce `worldDz = -1` (toward -Z / in the direction the camera looks). Fixed the transformation matrix so W/ArrowUp moves forward and S/ArrowDown moves backward.
 
-2. **Mouse-look yaw not accumulating** — `applyLookAt()` created a fresh `Euler(0,0,0)` each call and applied only the current `deltaYaw`, ignoring cumulative yaw. Replaced with two clean functions: `updateLookAngles()` (pure math returning cumulative `[yaw, pitch]` with clamped pitch) and `applyLook()` (applies absolute yaw/pitch to camera quaternion via YXZ Euler).
+2. **Zoom direction reversed** — `applyZoom` used `fov - delta * sensitivity`, making positive `deltaY` (scroll down) decrease FOV (zoom in). User expects scroll down = zoom out. Changed to `fov + delta * sensitivity` so positive `deltaY` increases FOV (zoom out) and negative decreases FOV (zoom in).
 
-3. **Scroll-to-zoom** — Added `applyZoom()` helper and `wheel` event listener. Positive `deltaY` (scroll down) decreases FOV (zoom in), negative increases FOV (zoom out). Clamped to `minFov`/`maxFov` (10°–90°). FOV resets to 60° on free nav exit.
+3. **Real Playwright input coverage** — Replaced all `page.evaluate()` synthetic `KeyboardEvent`/`WheelEvent` dispatches with `page.keyboard.down()`/`page.keyboard.up()` and `page.mouse.wheel()`. Added `enableFreeNav()` helper. Added test proving W and S move in opposite directions.
 
 ## Files Changed
-- `src/lib/spark/freeNavigation.ts` — Fixed `shouldHandleKeyEvent` for checkbox/radio; replaced `applyLookAt` with `updateLookAngles` + `applyLook`; added `applyZoom`; added `zoomSensitivity`, `minFov`, `maxFov` to config
-- `src/lib/components/RadViewerScene.svelte` — Uses new `updateLookAngles`/`applyLook` API; added `handleWheel` for zoom; added `data-yaw`, `data-pitch`, `data-zoom` debug attributes; FOV reset on exit
-- `src/App.svelte` — Added `tabindex="-1"` and `onblur` to checkbox; updated hint text
-- `tests/unit/freeNavigation.test.ts` — 37 tests: checkbox/radio filtering, yaw accumulation, pitch clamping, zoom clamping, identity quaternion
-- `tests/e2e/rad-viewer.spec.ts` — 15 tests: mouse yaw/pitch verification, zoom in/out, zoom disabled when free nav off
-- `AGENTS.md` — Updated free navigation section with zoom, new function signatures, checkbox focus handling
-- `README.md` — Updated feature list and usage instructions
+- `src/lib/spark/freeNavigation.ts` — Fixed `applyMovement` world-space transform; reversed `applyZoom` sign; updated comments
+- `tests/e2e/rad-viewer.spec.ts` — Replaced synthetic events with real Playwright input; added `enableFreeNav()` helper; added W/S opposite-direction test; added zoom-in and zoom-out tests with real `page.mouse.wheel()`
+- `tests/unit/freeNavigation.test.ts` — Updated movement tests for corrected math (W forward, S backward); updated zoom tests for reversed direction
+- `AGENTS.md` — Updated zoom direction documentation
 
 ## Implementation Notes
-- The `updateLookAngles`/`applyLook` split follows the pattern suggested in the mission brief: pure math for angle updates, separate function for camera application. This keeps yaw/pitch fully cumulative and testable.
-- The `applyZoom` formula is `newFov = camera.fov - scrollDelta * sensitivity`. Positive `deltaY` (scroll down toward bottom of page) decreases FOV (zoom in). Negative `deltaY` (scroll up) increases FOV (zoom out). This matches the convention where scrolling "toward" content zooms in.
-- The `pressedKeys` Set is no longer wrapped in `$state()` — it's a plain Set mutated directly, which avoids any Svelte proxy overhead in the hot rAF path.
+- The `applyMovement` fix changed the rotation formula from `worldDx = cosYaw*dx - sinYaw*dz` to `worldDx = cosYaw*dx + sinYaw*dz` (and similarly for `worldDz`). This correctly transforms local-space directions to world space using a standard yaw rotation matrix.
+- The zoom formula is now `newFov = camera.fov + scrollDelta * sensitivity`. At the default sensitivity of 3, each scroll tick of ~100 changes FOV by ~300 degrees, but clamping to 10°–90° prevents overshoot.
+- All keyboard and wheel e2e tests now use real Playwright input APIs (`page.keyboard.down()`, `page.keyboard.up()`, `page.mouse.wheel()`) instead of synthetic `window.dispatchEvent()` calls.
 
 ## Acceptance Criteria
-- [x] Mouse-look yaw accumulates correctly across repeated mouse movement
-- [x] Pitch remains clamped
-- [x] Keyboard movement uses the same yaw orientation that mouse look applies
-- [x] E2E verifies mouse movement changes orientation state (yaw/pitch), not only that free nav remains enabled
-- [x] Existing e2e still verifies keyboard movement changes camera position when free nav is enabled
-- [x] Existing e2e still verifies scroll-driven camera tween works when free nav is disabled
-- [x] Tests cover the updated free-navigation math (37 unit tests, 15 e2e tests)
-- [x] Scroll-to-zoom added and tested
+- [x] Real Playwright keyboard input proves free-navigation keyboard movement works after enabling the checkbox
+- [x] `W` / Arrow Up moves forward, and `S` / Arrow Down moves backward, not reversed
+- [x] Direction semantics covered in unit tests and e2e assertion (W/S opposite directions)
+- [x] Real Playwright mouse wheel input proves zoom-in works with negative `deltaY`
+- [x] Real Playwright mouse wheel input proves zoom-out works with positive `deltaY`, beyond initial FOV
+- [x] Wheel zoom remains inactive when free navigation is off
+- [x] Mouse-look yaw/pitch tests remain in place
+- [x] Scroll-driven camera tween still works when free navigation is off
+- [x] README and AGENTS describe the correct key and zoom behavior
 - [x] Status report metadata is accurate
 
 ## Tests Run
 - `npm run check` - 0 errors, 0 warnings
 - `npm run lint` - clean (0 errors, 0 warnings)
-- `npm run test:unit` - 64 tests passed (4 test files)
-- `npm run test:e2e` - 15 tests passed
+- `npm run test:unit` - 66 tests passed (4 test files)
+- `npm run test:e2e` - 17 tests passed
 - `npm run build` - built successfully
 
 ## Known Issues / Follow-ups
-- The `state_referenced_locally` Svelte compiler warnings in `SparkSplats.svelte` (about `profile.sparkRenderer.*` references) are pre-existing and suppressed in the `svelte-check` config. They are harmless because the SparkRenderer options are built once in `onMount` and never change.
-- No transform-prop e2e test was added. The Spark stub `SplatMesh` extends `THREE.Object3D` but Threlte's `<T>` component internals are not easily accessible from e2e without brittle DOM probing. The declarative transform API is verified through TypeScript type checking (`npm run check`) and the unit test coverage of the component's prop defaults.
+- The `state_referenced_locally` Svelte compiler warnings in `SparkSplats.svelte` are pre-existing and suppressed in the `svelte-check` config. They are harmless because the SparkRenderer options are built once in `onMount` and never change.
 
 ## Commit / Push
 - Branch: main
-- Verified prior implementation commit: 22a0f84
-- Follow-up commit: 5b33240
+- Verified prior implementation commit: e0fdb69
+- Follow-up commit: 4985b4e
 - Pushed: no (pending)

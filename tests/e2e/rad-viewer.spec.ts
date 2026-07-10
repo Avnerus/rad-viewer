@@ -28,6 +28,15 @@ async function startViewer(page: import('@playwright/test').Page) {
   await expect(page.locator('canvas')).toBeVisible({ timeout: 15_000 })
 }
 
+/** Helper: enable free navigation and wait for it to activate */
+async function enableFreeNav(page: import('@playwright/test').Page) {
+  const checkbox = page.getByLabel('Free navigation')
+  await checkbox.check()
+  await page.waitForTimeout(500)
+  const state = await getCameraState(page)
+  expect(state.freeNav).toBe('true')
+}
+
 test.describe('RAD Viewer', () => {
   test('landing screen shows URL input and start button', async ({ page }) => {
     await page.goto('/')
@@ -142,53 +151,48 @@ test.describe('Free Navigation', () => {
     await expect(page.getByText(/WASD|Arrows/i)).toBeVisible()
   })
 
-  test('keyboard movement changes camera position when free nav is enabled', async ({ page }) => {
+  test('keyboard W moves forward using real Playwright input', async ({ page }) => {
     await startViewer(page)
+    await enableFreeNav(page)
 
-    // Enable free navigation
-    const checkbox = page.getByLabel('Free navigation')
-    await checkbox.check()
-    await page.waitForTimeout(500)
-
-    // Verify free nav is active via the debug element
     const stateBefore = await getCameraState(page)
-    expect(stateBefore.freeNav).toBe('true')
 
-    // Dispatch keyboard events via page.evaluate to ensure they hit the window listener
-    // and let the rAF loop process movement
-    const result = await page.evaluate(() => {
-      return new Promise<{ startX: number; startZ: number; endX: number; endZ: number }>((resolve) => {
-        const debugEl = document.querySelector('[data-testid="camera-state"]')!
-        const startX = parseFloat(debugEl.getAttribute('data-x')!)
-        const startZ = parseFloat(debugEl.getAttribute('data-z')!)
+    // Use real Playwright keyboard input
+    await page.keyboard.down('KeyW')
+    await page.waitForTimeout(800)
+    await page.keyboard.up('KeyW')
+    await page.waitForTimeout(100)
 
-        // Dispatch keydown on window
-        const keyDown = new KeyboardEvent('keydown', { key: 'w', bubbles: true })
-        window.dispatchEvent(keyDown)
-
-        // Let rAF run for ~60 frames (~1 second at 60fps)
-        let frames = 0
-        function tick() {
-          frames++
-          if (frames >= 60) {
-            const endX = parseFloat(debugEl.getAttribute('data-x')!)
-            const endZ = parseFloat(debugEl.getAttribute('data-z')!)
-            // Dispatch keyup to clean up
-            const keyUp = new KeyboardEvent('keyup', { key: 'w', bubbles: true })
-            window.dispatchEvent(keyUp)
-            resolve({ startX, startZ, endX, endZ })
-            return
-          }
-          requestAnimationFrame(tick)
-        }
-        requestAnimationFrame(tick)
-      })
-    })
-
-    const dx = result.endX - result.startX
-    const dz = result.endZ - result.startZ
+    const stateAfter = await getCameraState(page)
+    const dx = stateAfter.x - stateBefore.x
+    const dz = stateAfter.z - stateBefore.z
     const moved = Math.sqrt(dx * dx + dz * dz)
     expect(moved).toBeGreaterThan(0)
+  })
+
+  test('keyboard W and S move in opposite directions', async ({ page }) => {
+    await startViewer(page)
+    await enableFreeNav(page)
+
+    const startState = await getCameraState(page)
+
+    // Press W (forward)
+    await page.keyboard.down('KeyW')
+    await page.waitForTimeout(400)
+    await page.keyboard.up('KeyW')
+    const afterW = await getCameraState(page)
+
+    // Press S (backward) from the new position
+    await page.keyboard.down('KeyS')
+    await page.waitForTimeout(400)
+    await page.keyboard.up('KeyS')
+    const afterS = await getCameraState(page)
+
+    // W moved camera one way, S should have moved it back toward start
+    // The z deltas should have opposite signs (W goes one way, S goes the other)
+    const wDeltaZ = afterW.z - startState.z
+    const sDeltaZ = afterS.z - afterW.z
+    expect(wDeltaZ * sDeltaZ).toBeLessThan(0)
   })
 
   test('keyboard movement does not affect camera when free nav is disabled', async ({ page }) => {
@@ -241,15 +245,10 @@ test.describe('Free Navigation', () => {
 
   test('mouse movement changes camera yaw and pitch', async ({ page }) => {
     await startViewer(page)
-
-    // Enable free navigation
-    const checkbox = page.getByLabel('Free navigation')
-    await checkbox.check()
-    await page.waitForTimeout(300)
+    await enableFreeNav(page)
 
     // Capture initial orientation
     const stateBefore = await getCameraState(page)
-    expect(stateBefore.freeNav).toBe('true')
 
     // Move mouse in the canvas area — right then down
     const canvas = page.locator('canvas')
@@ -278,29 +277,37 @@ test.describe('Free Navigation', () => {
     expect(yawChanged || pitchChanged).toBe(true)
   })
 
-  test('scroll wheel zoom changes camera FOV in free nav mode', async ({ page }) => {
+  test('scroll wheel zoom-in decreases FOV using real Playwright wheel', async ({ page }) => {
     await startViewer(page)
-
-    // Enable free navigation
-    const checkbox = page.getByLabel('Free navigation')
-    await checkbox.check()
-    await page.waitForTimeout(300)
+    await enableFreeNav(page)
 
     const stateBefore = await getCameraState(page)
-    expect(stateBefore.freeNav).toBe('true')
+    expect(stateBefore.zoom).toBeCloseTo(60, 0)
 
-    // Dispatch a wheel event via evaluate to simulate scroll
-    await page.evaluate(() => {
-      const event = new WheelEvent('wheel', { deltaY: -200, bubbles: true })
-      document.dispatchEvent(event)
-    })
+    // Scroll up (negative deltaY) to zoom in
+    await page.mouse.wheel(0, -200)
     await page.waitForTimeout(200)
 
     const stateAfter = await getCameraState(page)
-    // Zoom (FOV) should have changed
-    expect(stateAfter.zoom).not.toBeCloseTo(stateBefore.zoom, 1)
-    // Zoom should be within valid range
+    // Zoom (FOV) should have decreased (zoomed in)
+    expect(stateAfter.zoom).toBeLessThan(stateBefore.zoom)
     expect(stateAfter.zoom).toBeGreaterThanOrEqual(10)
+  })
+
+  test('scroll wheel zoom-out increases FOV beyond initial view', async ({ page }) => {
+    await startViewer(page)
+    await enableFreeNav(page)
+
+    const stateBefore = await getCameraState(page)
+    expect(stateBefore.zoom).toBeCloseTo(60, 0)
+
+    // Scroll down (positive deltaY) to zoom out
+    await page.mouse.wheel(0, 200)
+    await page.waitForTimeout(200)
+
+    const stateAfter = await getCameraState(page)
+    // Zoom (FOV) should have increased (zoomed out), beyond initial 60
+    expect(stateAfter.zoom).toBeGreaterThan(stateBefore.zoom)
     expect(stateAfter.zoom).toBeLessThanOrEqual(90)
   })
 
@@ -311,11 +318,8 @@ test.describe('Free Navigation', () => {
     const stateBefore = await getCameraState(page)
     expect(stateBefore.freeNav).toBe('false')
 
-    // Dispatch wheel event — should not zoom when free nav is off
-    await page.evaluate(() => {
-      const event = new WheelEvent('wheel', { deltaY: -200, bubbles: true })
-      document.dispatchEvent(event)
-    })
+    // Wheel should not zoom when free nav is off
+    await page.mouse.wheel(0, 200)
     await page.waitForTimeout(200)
 
     const stateAfter = await getCameraState(page)

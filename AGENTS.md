@@ -79,7 +79,7 @@ Movement logic is extracted into pure functions in `src/lib/spark/freeNavigation
 - `applyMovement(camera, direction, yaw, dt, speed)` — frame-rate-independent movement
 - `updateLookAngles(currentYaw, currentPitch, deltaYaw, deltaPitch, minPitch, maxPitch)` — pure math returning cumulative `[yaw, pitch]` with clamped pitch
 - `applyLook(camera, yaw, pitch)` — applies absolute yaw/pitch to camera quaternion via YXZ Euler
-- `applyZoom(camera, scrollDelta, sensitivity, minFov, maxFov)` — clamped FOV adjustment from scroll delta
+- `applyZoom(camera, scrollDelta, sensitivity, minFov, maxFov)` — clamped FOV adjustment from scroll delta (positive `deltaY` = zoom out / increase FOV, negative = zoom in / decrease FOV)
 - `extractYawPitch(camera)` — read current orientation
 - `shouldHandleKeyEvent(event)` — skip text inputs, allow checkboxes/radios
 - `isNavKey(key)` — check if key is WASD/arrow

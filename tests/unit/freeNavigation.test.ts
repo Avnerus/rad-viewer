@@ -182,16 +182,42 @@ describe('computeMoveDirection', () => {
 })
 
 describe('applyMovement', () => {
-  it('moves camera when direction is non-zero', () => {
+  it('moves camera forward (toward -Z) when W is pressed at yaw=0', () => {
     const camera = {
-      position: { x: 0, y: 5, z: 0 },
+      position: { x: 0, y: 5, z: 10 },
     } as unknown as Parameters<typeof applyMovement>[0]
 
-    // Forward direction with yaw=0
+    // Forward = [0, 0, -1] (local -Z), yaw=0 means camera looks down -Z
+    // worldDx = cos(0)*0 + sin(0)*(-1) = 0
+    // worldDz = -sin(0)*0 + cos(0)*(-1) = -1
+    // So z -= 5, moving toward origin (forward)
     applyMovement(camera, [0, 0, -1], 0, 1, 5)
-    // With yaw=0: worldDz = -cos(0)*(-1) = 1, so z += 5
     expect(camera.position.z).toBeCloseTo(5)
     expect(camera.position.x).toBeCloseTo(0)
+  })
+
+  it('moves camera backward (toward +Z) when S is pressed at yaw=0', () => {
+    const camera = {
+      position: { x: 0, y: 5, z: 10 },
+    } as unknown as Parameters<typeof applyMovement>[0]
+
+    // Backward = [0, 0, 1] (local +Z)
+    // worldDx = cos(0)*0 + sin(0)*1 = 0
+    // worldDz = -sin(0)*0 + cos(0)*1 = 1
+    // So z += 5, moving away from origin (backward)
+    applyMovement(camera, [0, 0, 1], 0, 1, 5)
+    expect(camera.position.z).toBeCloseTo(15)
+    expect(camera.position.x).toBeCloseTo(0)
+  })
+
+  it('W and S move in opposite directions', () => {
+    const camW = { position: { x: 0, y: 5, z: 10 } } as unknown as Parameters<typeof applyMovement>[0]
+    const camS = { position: { x: 0, y: 5, z: 10 } } as unknown as Parameters<typeof applyMovement>[0]
+
+    applyMovement(camW, [0, 0, -1], 0, 1, 5) // W (forward)
+    applyMovement(camS, [0, 0, 1], 0, 1, 5)  // S (backward)
+
+    expect(camW.position.z).toBeLessThan(camS.position.z)
   })
 
   it('does not move when direction is zero', () => {
@@ -206,10 +232,11 @@ describe('applyMovement', () => {
 
   it('respects delta time', () => {
     const camera = {
-      position: { x: 0, y: 5, z: 0 },
+      position: { x: 0, y: 5, z: 10 },
     } as unknown as Parameters<typeof applyMovement>[0]
 
-    // delta=0.5, speed=10 => dist=5
+    // Forward [0,0,-1], delta=0.5, speed=10 => dist=5
+    // worldDz = cos(0)*(-1) = -1, so z -= 5
     applyMovement(camera, [0, 0, -1], 0, 0.5, 10)
     expect(camera.position.z).toBeCloseTo(5)
   })
@@ -219,11 +246,12 @@ describe('applyMovement', () => {
       position: { x: 0, y: 5, z: 0 },
     } as unknown as Parameters<typeof applyMovement>[0]
 
-    // Yaw = PI/2 (looking along +X)
-    // Forward with yaw=PI/2: worldDx = cos(PI/2)*0 - sin(PI/2)*(-1) = 1
-    // worldDz = -sin(PI/2)*0 - cos(PI/2)*(-1) = 0
+    // Yaw = PI/2 (rotated 90° clockwise looking along -X)
+    // Forward [0,0,-1] with yaw=PI/2:
+    // worldDx = cos(PI/2)*0 + sin(PI/2)*(-1) = -1
+    // worldDz = -sin(PI/2)*0 + cos(PI/2)*(-1) = 0
     applyMovement(camera, [0, 0, -1], Math.PI / 2, 1, 5)
-    expect(camera.position.x).toBeCloseTo(5)
+    expect(camera.position.x).toBeCloseTo(-5)
     expect(camera.position.z).toBeCloseTo(0)
   })
 })
@@ -312,28 +340,28 @@ describe('applyLook', () => {
 })
 
 describe('applyZoom', () => {
-  it('increases FOV on negative delta (scroll up / zoom out)', () => {
+  it('increases FOV on positive delta (scroll down / zoom out)', () => {
     const updateFn = vi.fn()
     const camera = {
       fov: 60,
       updateProjectionMatrix: updateFn,
     } as unknown as Parameters<typeof applyZoom>[0]
 
-    // newFov = 60 - (-10)*3 = 90
-    const newFov = applyZoom(camera, -10, 3, 10, 90)
+    // newFov = 60 + 10*3 = 90
+    const newFov = applyZoom(camera, 10, 3, 10, 90)
     expect(newFov).toBeCloseTo(90)
     expect(updateFn).toHaveBeenCalled()
   })
 
-  it('decreases FOV on positive delta (scroll down / zoom in)', () => {
+  it('decreases FOV on negative delta (scroll up / zoom in)', () => {
     const updateFn = vi.fn()
     const camera = {
       fov: 60,
       updateProjectionMatrix: updateFn,
     } as unknown as Parameters<typeof applyZoom>[0]
 
-    // newFov = 60 - 10*3 = 30
-    const newFov = applyZoom(camera, 10, 3, 10, 90)
+    // newFov = 60 + (-10)*3 = 30
+    const newFov = applyZoom(camera, -10, 3, 10, 90)
     expect(newFov).toBeCloseTo(30)
     expect(updateFn).toHaveBeenCalled()
   })
@@ -344,9 +372,9 @@ describe('applyZoom', () => {
       updateProjectionMatrix: vi.fn(),
     } as unknown as Parameters<typeof applyZoom>[0]
 
-    // Large positive delta drives FOV way below min
-    // 15 - 100*3 = -285, clamped to 10
-    const newFov = applyZoom(camera, 100, 3, 10, 90)
+    // Large negative delta drives FOV way below min
+    // 15 + (-100)*3 = -285, clamped to 10
+    const newFov = applyZoom(camera, -100, 3, 10, 90)
     expect(newFov).toBeCloseTo(10)
   })
 
@@ -356,8 +384,8 @@ describe('applyZoom', () => {
       updateProjectionMatrix: vi.fn(),
     } as unknown as Parameters<typeof applyZoom>[0]
 
-    const newFov = applyZoom(camera, -100, 3, 10, 90)
-    // 85 - (-100)*3 = 385, clamped to 90
+    // 85 + 100*3 = 385, clamped to 90
+    const newFov = applyZoom(camera, 100, 3, 10, 90)
     expect(newFov).toBeCloseTo(90)
   })
 
@@ -374,8 +402,8 @@ describe('applyZoom', () => {
       DEFAULT_FREE_NAV_CONFIG.minFov,
       DEFAULT_FREE_NAV_CONFIG.maxFov,
     )
-    // 60 - 5*3 = 45
-    expect(newFov).toBeCloseTo(45)
+    // 60 + 5*3 = 75
+    expect(newFov).toBeCloseTo(75)
   })
 })
 

@@ -101,6 +101,13 @@ export function computeMoveDirection(keys: Set<string>): [number, number, number
 
 /**
  * Apply a movement delta to the camera position using its current yaw.
+ * Moves the camera in world space based on the given local-space direction
+ * and the camera's yaw orientation.
+ *
+ * Coordinate convention (Three.js):
+ * - Y is up
+ * - Camera at yaw=0 looks down world -Z
+ * - Local forward = -Z, local right = +X
  *
  * @param camera The Three.js camera to move.
  * @param direction Local-space direction from {@link computeMoveDirection}.
@@ -120,15 +127,15 @@ export function applyMovement(
 
   const dist = speed * deltaSeconds
 
-  // Forward direction in world space (Y = up, Z = forward)
   const cosYaw = Math.cos(yaw)
   const sinYaw = Math.sin(yaw)
 
-  // Local forward = -Z, local right = +X
-  // World forward = (-sinYaw, 0, -cosYaw)
-  // World right = (cosYaw, 0, -sinYaw)
-  const worldDx = cosYaw * dx - sinYaw * dz
-  const worldDz = -sinYaw * dx - cosYaw * dz
+  // Transform local direction to world space using yaw rotation.
+  // Local forward = (0, 0, -1), local right = (1, 0, 0).
+  // At yaw=0: world forward = (0, 0, -1), world right = (1, 0, 0).
+  // At yaw=PI/2: world forward = (-1, 0, 0), world right = (0, 0, 1).
+  const worldDx = cosYaw * dx + sinYaw * dz
+  const worldDz = -sinYaw * dx + cosYaw * dz
 
   camera.position.x += worldDx * dist
   camera.position.z += worldDz * dist
@@ -194,11 +201,11 @@ export function extractYawPitch(camera: PerspectiveCamera): [number, number] {
 
 /**
  * Apply scroll-wheel zoom to the camera FOV.
- * Positive delta (scroll down) zooms out (increases FOV).
- * Negative delta (scroll up) zooms in (decreases FOV).
+ * Positive delta (scroll down / away) zooms out by increasing FOV.
+ * Negative delta (scroll up / toward) zooms in by decreasing FOV.
  *
  * @param camera The Three.js PerspectiveCamera.
- * @param scrollDelta Mouse wheel delta (negative = scroll up / zoom in).
+ * @param scrollDelta Mouse wheel deltaY (positive = scroll down / zoom out).
  * @param sensitivity FOV change per unit of scroll delta.
  * @param minFov Minimum FOV in degrees (most zoomed in).
  * @param maxFov Maximum FOV in degrees (most zoomed out).
@@ -211,7 +218,7 @@ export function applyZoom(
   minFov: number,
   maxFov: number,
 ): number {
-  const newFov = camera.fov - scrollDelta * sensitivity
+  const newFov = camera.fov + scrollDelta * sensitivity
   const clamped = Math.max(minFov, Math.min(maxFov, newFov))
   camera.fov = clamped
   camera.updateProjectionMatrix()
