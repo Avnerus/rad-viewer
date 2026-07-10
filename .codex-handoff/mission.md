@@ -1,155 +1,115 @@
-# Mission Brief for Pi: Declarative Splat Transform and Optional Free Navigation
+# Follow-up Mission for Pi: Fix Free-Navigation Mouse Look Verification
 
 ## Objective
-Update `rad-viewer` so Spark splat transforms are controlled declaratively through the Threlte-facing `<SparkSplats>` component API, then add one viewer checkbox that enables both mouse-driven camera panning/look and first-person keyboard navigation with `WASD` and arrow keys.
+The declarative splat transform implementation is mostly in place, but Codex verification found a real mouse-look math issue and weak test coverage around mouse movement. Fix those without reworking the broader viewer.
 
-Current context observed by Codex:
-- `src/lib/components/SparkSplats.svelte` imperatively applies static splat positioning with `mesh.position.set(12, 1,17);`.
-- `src/lib/components/RadViewerScene.svelte` currently renders `<SparkSplats {url} {profile} />`.
-- `SparkRenderer` and `SplatMesh` are currently added imperatively to the Three scene.
-- There is an unrelated local `.gitignore` modification in the workspace adding `.vercel`; do not overwrite unrelated user work.
+## Verification Context
+Codex pulled the implementation as:
+
+```text
+22a0f84 feat: declarative splat transforms and free navigation checkbox
+```
+
+Observed good changes:
+- `src/lib/components/SparkSplats.svelte` removed the hardcoded `mesh.position.set(12, 1,17);`.
+- `src/lib/components/RadViewerScene.svelte` now passes `position={[12, 1, 17]}` to `<SparkSplats>`.
+- `SplatMesh` is rendered via `<T is={mesh} {position} {rotation} {scale} />`.
+- `SparkRenderer` remains imperative and configured with `pagedExtSplats: true`.
+- One "Free navigation" checkbox controls keyboard and mouse free-nav mode.
+
+Problems to fix:
+- `src/lib/spark/freeNavigation.ts` `applyLookAt()` currently creates a fresh Euler with `euler.y += deltaYaw`, starting from zero each call. `RadViewerScene.svelte` passes only the latest `deltaYaw`, then increments `navYaw` separately. Result: visual camera yaw does not accumulate correctly across mouse moves and ignores the current/extracted yaw.
+- `tests/e2e/rad-viewer.spec.ts` "mouse movement path smoke test" only verifies `data-freenav="true"`. It does not prove that mouse movement changed orientation.
+- `.codex-handoff/status.md` reports `Commit: 7a1ec95` and `Pushed: no`, while Codex pulled `22a0f84`.
 
 ## Files Likely Involved
-- `src/lib/components/SparkSplats.svelte`
+- `src/lib/spark/freeNavigation.ts`
 - `src/lib/components/RadViewerScene.svelte`
-- `src/App.svelte` if the checkbox state should live at the app/viewer shell level
-- `src/app.css`
-- `src/lib/types.ts`
-- `src/lib/spark/cameraTween.ts` only if navigation mode needs camera pose helpers
-- `src/lib/spark/freeNavigation.ts` or similar new helper if useful
-- `tests/unit/*.test.ts`
+- `tests/unit/freeNavigation.test.ts`
 - `tests/e2e/rad-viewer.spec.ts`
-- `AGENTS.md`
-- `README.md` if user-visible controls or commands change
-- `.codex-handoff/status.md` as the final report
+- `AGENTS.md` if navigation internals/debug attributes change
+- `.codex-handoff/status.md`
 
-## Required Implementation
-1. Move static splat positioning to declarative component props.
-   - Remove the hardcoded `mesh.position.set(12, 1,17);` from `SparkSplats.svelte`.
-   - Add typed props to `SparkSplats.svelte`, at minimum:
-     - `position?: [number, number, number]`
-     - optionally `rotation?: [number, number, number]`
-     - optionally `scale?: number | [number, number, number]`
-   - Keep the current static value by passing it declaratively from the parent:
+## Required Fixes
+1. Fix mouse-look yaw accumulation.
+   - Make camera orientation use cumulative yaw and cumulative/clamped pitch.
+   - Prefer changing helper API to accept the new absolute yaw and pitch, or accept current yaw/pitch plus deltas and return both updated values.
+   - Do not reset yaw to only the latest mouse delta.
+   - Preserve pitch clamping.
+   - Ensure keyboard movement direction uses the same yaw that camera orientation uses.
 
-```svelte
-<SparkSplats
-  {url}
-  {profile}
-  position={[12, 1, 17]}
-/>
+One acceptable shape:
+
+```ts
+export function applyLook(
+  camera: PerspectiveCamera,
+  yaw: number,
+  pitch: number,
+): void {
+  const euler = new Euler(pitch, yaw, 0, 'YXZ')
+  camera.quaternion.copy(new Quaternion().setFromEuler(euler))
+}
+
+export function updateLookAngles(
+  currentYaw: number,
+  currentPitch: number,
+  deltaYaw: number,
+  deltaPitch: number,
+  minPitch: number,
+  maxPitch: number,
+): [number, number] {
+  const nextYaw = currentYaw + deltaYaw
+  const nextPitch = Math.max(minPitch, Math.min(maxPitch, currentPitch + deltaPitch))
+  return [nextYaw, nextPitch]
+}
 ```
 
-2. Prefer Threlte ownership for the `SplatMesh`.
-   - Keep `SparkRenderer` imperative. It is renderer infrastructure and should still be created with the real `renderer`, `pagedExtSplats: true`, and the device profile options.
-   - Wrap the `SplatMesh` with Threlte `<T is={mesh} ... />` so transforms are applied declaratively.
-   - Do not also call `scene.add(mesh)` when the mesh is rendered through `<T>`.
-   - Dispose the mesh on destroy. Ensure no duplicate scene membership and no leaked Spark objects.
-   - If Threlte `<T>` cannot safely own `SplatMesh`, document the blocker in status and still provide a declarative props API that applies transforms through a reactive effect.
+Then in `RadViewerScene.svelte`, update `navYaw` and `navPitch` first, apply the absolute values to the camera, and keep movement using `navYaw`.
 
-Critical shape:
+2. Expose enough camera orientation debug state for e2e.
+   - Add hidden debug attributes such as `data-yaw` and `data-pitch`, or a forward vector attribute, to `data-testid="camera-state"`.
+   - Keep existing position/progress/freenav attributes.
+   - This is for tests only and should remain visually hidden.
 
-```svelte
-<script lang="ts">
-  import { T, useThrelte } from '@threlte/core'
-  import { onDestroy, onMount } from 'svelte'
-  import { SparkRenderer, SplatMesh } from '@sparkjsdev/spark'
+3. Strengthen mouse e2e.
+   - The mouse movement test must capture initial orientation debug state, move the mouse while free nav is enabled, then assert yaw/pitch/forward vector changed.
+   - Keep the existing keyboard movement e2e.
+   - Keep scroll-mode e2e proving ScrollTrigger still works when free nav is off.
 
-  let {
-    url,
-    profile,
-    position = [0, 0, 0],
-    rotation = [0, 0, 0],
-    scale = 1,
-  } = $props()
+4. Strengthen unit tests for free-navigation math.
+   - Add tests showing repeated mouse/yaw deltas accumulate instead of resetting.
+   - Add tests for pitch clamping with the new helper API.
+   - If the helper names change, update imports cleanly.
 
-  const { renderer, scene } = useThrelte()
-  let spark: SparkRenderer | null = null
-  let mesh: SplatMesh | null = $state(null)
+5. Add a lightweight transform-prop test if practical.
+   - The previous status claimed tests cover the declarative transform API. Codex did not see a direct assertion beyond source shape.
+   - If practical, add a component or e2e assertion using the Spark stub to verify the declarative position prop reaches the stub `SplatMesh` or Threlte object.
+   - If this is not practical without brittle internals, document the reason in the status report.
 
-  onMount(() => {
-    spark = new SparkRenderer({
-      renderer,
-      pagedExtSplats: true,
-      ...profile.sparkRenderer,
-    })
-    scene.add(spark)
-
-    mesh = new SplatMesh({
-      url,
-      paged: true,
-      raycastable: false,
-    })
-  })
-
-  onDestroy(() => {
-    mesh?.dispose()
-    spark?.parent?.remove(spark)
-    spark?.dispose()
-  })
-</script>
-
-{#if mesh}
-  <T is={mesh} {position} {rotation} {scale} />
-{/if}
-```
-
-3. Add one checkbox that enables both mouse panning/look and first-person keyboard movement.
-   - Add a single user-facing checkbox, for example "Free navigation".
-   - When unchecked, preserve the current scroll-driven camera tween behavior.
-   - When checked:
-     - Enable mouse-movement camera panning/look in the canvas/viewer area.
-     - Enable first-person keyboard movement with `W`, `A`, `S`, `D` and arrow keys.
-     - Use a single checkbox state for both mouse and keyboard behavior. Do not add separate toggles.
-     - Avoid fighting the existing ScrollTrigger camera tween. A reasonable approach is to disable/ignore ScrollTrigger camera updates while free navigation is enabled, then restore the scroll pose when disabled.
-     - Do not require pointer lock unless you decide it is necessary; if used, make the interaction and tests robust.
-     - Prevent keyboard handling from interfering with typing in form controls.
-   - Use small, deterministic movement constants and clamp pitch to avoid camera flips.
-
-4. Keep camera target behavior clear.
-   - Scroll mode must still tween from perspective to top-down and keep the fixed lookAt center.
-   - Free navigation mode may use yaw/pitch orientation and should not be constrained to the center lookAt target while enabled.
-   - When returning to scroll mode, re-apply the current ScrollTrigger pose or the closest valid scroll pose so the camera is not left in a free-navigation orientation.
-
-5. Update tests.
-   - Add or update unit tests for transform prop helpers if you extract helper logic.
-   - Add unit tests for free-navigation math if movement/yaw/pitch logic is extracted.
-   - Update Playwright e2e to verify:
-     - the checkbox exists as one control;
-     - enabling it allows keyboard movement to change camera debug state;
-     - mouse movement path is at least smoke-tested if feasible with Playwright;
-     - disabling it restores scroll-driven behavior.
-   - Existing scroll e2e must continue to assert camera progress/position changes in scroll mode.
-
-6. Update docs.
-   - Update `AGENTS.md` with the current architecture:
-     - `SparkRenderer` remains imperative.
-     - `SplatMesh` is owned by Threlte `<T>` if implemented that way.
-     - `<SparkSplats>` accepts transform props such as `position`.
-     - The one "Free navigation" checkbox enables both mouse panning/look and WASD/arrow movement.
-   - Update `README.md` with the checkbox behavior if user-facing controls are described there.
+6. Correct status metadata.
+   - In the final `.codex-handoff/status.md`, do not report the old `7a1ec95` commit or `Pushed: no`.
+   - Report the implementation commit Codex verified (`22a0f84`) and the new follow-up commit accurately.
+   - If the final hash cannot be known before commit, phrase it as "final pushed commit containing this report" rather than inventing a hash.
 
 ## Constraints
-- Do not remove the sample RAD URL.
+- Do not rework the declarative `SplatMesh` ownership unless directly necessary for tests.
+- Do not change the sample RAD URL.
 - Do not add Theatre.js, `@threlte/theatre`, or `@threlte/studio`.
-- Do not add large assets.
-- Do not make e2e depend on loading the real remote RAD file; keep the Spark stub path working.
-- Do not weaken TypeScript, lint, or test coverage to pass.
-- Do not overwrite unrelated local/user changes such as the existing `.gitignore` modification.
-- Do not rework the app styling beyond what the checkbox/navigation affordance requires.
+- Do not add separate controls; one checkbox must still control both mouse look and WASD/arrow navigation.
+- Do not make e2e depend on the real remote RAD file; keep the Spark stub path working.
+- Do not weaken TypeScript, lint, or tests.
+- Do not touch `.gitignore` unless explicitly required.
 
 ## Acceptance Criteria
-- The hardcoded `mesh.position.set(12, 1,17);` is removed.
-- The same splat offset is preserved declaratively via `<SparkSplats position={[12, 1, 17]} />` or an equivalent typed prop.
-- `SplatMesh` is owned by Threlte `<T>` with declarative transform props, unless a documented technical blocker requires an imperative fallback.
-- `SparkRenderer` remains configured with `pagedExtSplats: true`, mobile-conscious profile options, and the real Threlte/Three renderer.
-- No duplicate scene-add path exists for the same `SplatMesh`.
-- One checkbox controls both mouse panning/look and WASD/arrow first-person navigation.
-- Scroll camera tween still works when the checkbox is off.
-- Free navigation changes camera state when the checkbox is on.
-- Keyboard listeners ignore form inputs and are cleaned up on destroy.
-- Tests cover the new declarative transform API and the one-checkbox free-navigation behavior.
-- `AGENTS.md` and README are updated where relevant.
+- Mouse-look yaw accumulates correctly across repeated mouse movement.
+- Pitch remains clamped.
+- Keyboard movement uses the same yaw orientation that mouse look applies.
+- E2E verifies mouse movement changes orientation state, not only that free nav remains enabled.
+- Existing e2e still verifies keyboard movement changes camera position when free nav is enabled.
+- Existing e2e still verifies scroll-driven camera tween works when free nav is disabled.
+- Tests cover the updated free-navigation math.
+- Transform-prop test coverage is added, or status explains why it was not practical.
+- Status report metadata no longer claims an unpushed/wrong commit.
 
 ## Tests to Run
 Run these before finalizing:
@@ -159,14 +119,12 @@ Run these before finalizing:
 - `npm run test:e2e`
 - `npm run build`
 
-Create new tests for new transform/navigation functionality; do not only rely on existing tests.
-
 ## Things Pi Must Not Change
 - Do not remove `.codex-handoff/mission.md`.
 - Do not overwrite unrelated user work.
-- Do not change `.gitignore` unless directly asked by the user.
+- Do not remove or weaken the declarative `<SparkSplats position={[12, 1, 17]} />` path.
 - Do not remove or weaken the existing scroll-driven camera interaction.
-- Do not add separate controls for mouse panning and keyboard navigation; use one checkbox.
+- Do not add separate controls for mouse and keyboard navigation.
 - Do not push without `status.md`.
 - Always write `status.md` as the last file modification before committing/pushing.
 - After pushing, do not perform any more verifications or modifications.
@@ -202,7 +160,8 @@ Write `.codex-handoff/status.md` with:
 
 ## Commit / Push
 - Branch:
-- Commit:
+- Verified prior implementation commit: 22a0f84
+- Follow-up commit:
 - Pushed: yes/no
 ```
 
