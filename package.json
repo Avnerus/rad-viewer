@@ -1,0 +1,43 @@
+{
+  "name": "rad-viewer",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --config ./svelte.config.js --no-tsconfig --compiler-warnings \"state_referenced_locally:ignore\"",
+    "lint": "eslint .",
+    "test:unit": "vitest run",
+    "test:e2e": "playwright test",
+    "test": "npm run test:unit && npm run test:e2e"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.50.0",
+    "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/svelte": "^5.2.4",
+    "@types/jsdom": "^21.1.7",
+    "@types/three": "^0.185.0",
+    "eslint": "^9.18.0",
+    "eslint-plugin-svelte": "^2.46.0",
+    "globals": "^15.14.0",
+    "jsdom": "^26.0.0",
+    "svelte": "^5.0.0",
+    "svelte-check": "^4.0.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.20.0",
+    "vite": "^6.0.0",
+    "vitest": "^3.0.0"
+  },
+  "dependencies": {
+    "@sparkjsdev/spark": "^2.0.0",
+    "@threlte/core": "^8.0.0",
+    "gsap": "^3.12.7",
+    "three": "^0.185.0"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true
+  }
+}

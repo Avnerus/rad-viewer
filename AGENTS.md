@@ -1,0 +1,65 @@
+# RAD Viewer — Technical Guide
+
+## Architecture
+
+A client-side Threlte/Svelte 5/TypeScript web app for viewing Spark 2.x streaming LOD Gaussian splats from user-provided RAD URLs.
+
+**Key files:**
+- `src/App.svelte` — Root component. Landing screen ↔ viewer state machine.
+- `src/lib/components/RadViewerScene.svelte` — Threlte `<Canvas>` + `<Camera>` + ScrollTrigger setup.
+- `src/lib/components/SparkSplats.svelte` — SparkRenderer + SplatMesh lifecycle component.
+- `src/lib/spark/cameraTween.ts` — Pure camera interpolation logic (unit-testable).
+- `src/lib/spark/deviceProfile.ts` — Mobile/iOS detection + Spark performance profile.
+- `src/lib/spark/radUrl.ts` — RAD URL validation with typed results.
+- `src/lib/types.ts` — Shared TypeScript types.
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Start Vite dev server |
+| `npm run build` | Production build |
+| `npm run preview` | Preview production build |
+| `npm run check` | Svelte + TypeScript type checking |
+| `npm run lint` | ESLint |
+| `npm run test:unit` | Vitest unit tests |
+| `npm run test:e2e` | Playwright e2e tests (builds + previews first) |
+| `npm run test` | Run unit + e2e tests |
+
+## Spark / Threlte Integration Notes
+
+- **SparkRenderer** is created once per viewer session with `pagedExtSplats: true` and device-profile options. Added to the Three.js scene imperatively.
+- **SplatMesh** is created with `paged: true` for RAD streaming. `$effect` handles URL changes (dispose old, create new).
+- **WebGLRenderer** uses `antialias: false` (splats don't benefit from MSAA).
+- **DPR** is clamped to `Math.min(devicePixelRatio, 2)` on desktop, `1` on mobile.
+- **renderMode="always"** on `<Canvas>` ensures Spark streaming/sorting and ScrollTrigger camera changes render every frame.
+- Theatre.js is **not** used.
+
+## ScrollTrigger Invariant
+
+The camera `lookAt` target is **always fixed at the scene center `[0, 0, 0]`** throughout scrolling. Only the camera position interpolates.
+
+ScrollTrigger is created in `RadViewerScene.svelte` `onMount`, killed on `onDestroy`.
+
+## Source References
+
+- Spark docs: https://sparkjs.dev/docs/
+- Spark LOD: https://sparkjs.dev/docs/lod-getting-started/
+- SparkRenderer API: https://sparkjs.dev/docs/spark-renderer/
+- SplatMesh API: https://sparkjs.dev/docs/splat-mesh/
+- Threlte docs: https://threlte.xyz/docs/
+- GSAP ScrollTrigger: https://gsap.com/docs/v3/Plugins/ScrollTrigger/
+
+## Sample RAD URL
+
+```
+https://storage.googleapis.com/forge-dev-public/asundqui/rad/260217/cozy-spaceship_2-lod.rad
+```
+
+## E2E Testing
+
+The e2e tests use the Spark test stub (`tests/fixtures/spark-stub.ts`) when `VITE_E2E_STUB_SPARK=true` to avoid depending on a large remote RAD file. The stub classes extend `THREE.Object3D` so the app mounts without errors.
+
+## CORS Note
+
+Remote RAD files and their `.radc` chunk files must be served with CORS headers. If a RAD URL fails to load, check that the origin allows cross-origin requests.
