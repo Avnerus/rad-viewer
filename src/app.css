@@ -154,12 +154,6 @@ body {
   white-space: nowrap;
 }
 
-/* Scroll track provides the scrollable height */
-.scroll-track {
-  height: 400vh;
-  pointer-events: none;
-}
-
 /* Camera debug state — visually hidden, for e2e tests */
 .camera-debug {
   position: absolute;
