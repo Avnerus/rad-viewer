@@ -80,7 +80,10 @@
   })
 </script>
 
-<SparkSplats {url} {profile} />
+<SparkSplats
+  {url} 
+  {profile} 
+/>
 
 <!-- Visually hidden debug element for e2e tests -->
 <div

@@ -42,6 +42,8 @@
         paged: true,
         raycastable: false,
       })
+      mesh.position.set(12, 1,17);
+
       scene.add(mesh)
     }
   })
