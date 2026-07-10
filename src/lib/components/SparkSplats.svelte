@@ -1,15 +1,15 @@
 <script lang="ts">
-  import { useThrelte } from '@threlte/core'
+  import { T, useThrelte } from '@threlte/core'
   import { onMount, onDestroy } from 'svelte'
   import { SparkRenderer, SplatMesh } from '@sparkjsdev/spark'
-  import type { DeviceProfile } from '$lib/types'
 
-  interface Props {
-    url: string
-    profile: DeviceProfile
-  }
-
-  let { url, profile }: Props = $props()
+  let {
+    url,
+    profile,
+    position = [0, 0, 0] as [number, number, number],
+    rotation = [0, 0, 0] as [number, number, number],
+    scale = 1 as number | [number, number, number],
+  } = $props()
 
   const { renderer, scene } = useThrelte()
 
@@ -28,33 +28,31 @@
   }
 
   let spark: SparkRenderer | null = null
-  let mesh: SplatMesh | null = null
+  let mesh: SplatMesh | null = $state(null)
 
   onMount(() => {
-    // Create SparkRenderer — added imperatively to the scene
+    // Create SparkRenderer — added imperatively to the scene (renderer infrastructure)
     spark = new SparkRenderer(sparkOptions)
     scene.add(spark)
 
-    // Create SplatMesh — added imperatively to the scene
+    // Create SplatMesh — owned by Threlte <T> below for declarative transforms
     if (url) {
       mesh = new SplatMesh({
         url,
         paged: true,
         raycastable: false,
       })
-      mesh.position.set(12, 1,17);
-
-      scene.add(mesh)
     }
   })
 
   onDestroy(() => {
-    // Remove from scene and dispose
-    mesh?.parent?.remove(mesh)
     mesh?.dispose()
     spark?.parent?.remove(spark)
     spark?.dispose()
   })
 </script>
 
-<!-- Both SparkRenderer and SplatMesh are added to the scene imperatively in onMount. -->
+<!-- SparkRenderer is added imperatively above. SplatMesh is owned by Threlte <T> for declarative transforms. -->
+{#if mesh}
+  <T is={mesh} {position} {rotation} {scale} />
+{/if}

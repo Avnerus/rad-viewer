@@ -14,6 +14,7 @@
   let activeUrl = $state('')
   let errorMsg = $state('')
   let loading = $state(false)
+  let freeNavEnabled = $state(false)
   let profile: DeviceProfile = getDeviceProfile()
 
   // Check for URL in query string on mount
@@ -55,10 +56,15 @@
     appState = 'landing'
     loading = false
     activeUrl = ''
+    freeNavEnabled = false
   }
 
   function handleReady() {
     loading = false
+  }
+
+  function handleFreeNavToggle(e: Event) {
+    freeNavEnabled = (e.target as HTMLInputElement).checked
   }
 </script>
 
@@ -105,7 +111,12 @@
         })
       }
     >
-      <RadViewerScene url={activeUrl} {profile} onReady={handleReady} />
+      <RadViewerScene
+        url={activeUrl}
+        {profile}
+        {freeNavEnabled}
+        onReady={handleReady}
+      />
     </Canvas>
 
     {#if loading}
@@ -113,6 +124,23 @@
         <div class="spinner"></div>
         <span>Loading splats…</span>
       </div>
+    {/if}
+  </div>
+
+  <!-- Free navigation toggle — outside Canvas so it renders as normal HTML -->
+  <div class="free-nav-toggle">
+    <label class="free-nav-label">
+      <input
+        type="checkbox"
+        class="free-nav-checkbox"
+        checked={freeNavEnabled}
+        onchange={handleFreeNavToggle}
+        aria-label="Free navigation"
+      />
+      Free navigation
+    </label>
+    {#if freeNavEnabled}
+      <span class="free-nav-hint">WASD / Arrows to move · Mouse to look</span>
     {/if}
   </div>
 

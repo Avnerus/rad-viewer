@@ -7,6 +7,7 @@ A web-based viewer for **Spark 2.x streaming LOD Gaussian splats** from user-pro
 - Landing screen with RAD URL input and start button
 - Full-viewport Threlte-powered Spark viewer
 - Scroll-driven camera animation: scroll from a perspective view to a top-down view
+- Free navigation mode: single checkbox enables mouse look + WASD/arrow first-person movement
 - Mobile-aware performance settings (DPR clamping, reduced splat budgets, foveation)
 - RAD URL validation with user-friendly error messages
 - URL preserved in query string for reloadability
@@ -45,7 +46,8 @@ npm run test       # All tests
 3. Click **Start**.
 4. The viewer loads the splat data via Spark's streaming LOD system.
 5. **Scroll** to animate the camera from an angled perspective to a top-down view.
-6. Click **← Back** to return to the URL input.
+6. Check **Free navigation** (bottom-right) to enable mouse look and `WASD`/arrow key movement. Uncheck it to return to scroll-driven camera.
+7. Click **← Back** to return to the URL input.
 
 ## Providing a RAD URL
 
