@@ -49,3 +49,4 @@ blob-report/
 
 # Browser cache
 .cache/
+.vercel
