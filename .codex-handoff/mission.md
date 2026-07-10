@@ -1,91 +1,86 @@
-# Follow-up Mission for Pi: Verify Real Keyboard and Wheel Input
+# Follow-up Mission for Pi: Fix Real Free-Navigation Input Semantics
 
 ## Objective
-The latest free-navigation implementation appears to fix the code path, but the e2e coverage still does not prove the real browser keyboard path that the user reported as broken. Add Playwright tests that use real `page.keyboard` and `page.mouse.wheel` interactions, fix any remaining keyboard-navigation bug those tests expose, and clean up small reporting/comment inconsistencies.
+Fix and verify the real browser input behavior for free navigation. The user reports:
+- Keyboard navigation does not work reliably.
+- `W`/`S` and Arrow Up/Down are reversed.
+- Mouse wheel zoom-out stops at the initial view, so the user can effectively only zoom in.
+
+Use real Playwright input coverage (`page.keyboard`, `page.mouse.wheel`) to reproduce and prevent regressions.
 
 ## Verification Context
-Codex pulled the latest implementation as:
+Codex last pulled the implementation as:
 
 ```text
 e0fdb69 fix: free navigation keyboard, mouse yaw accumulation, add scroll zoom
 ```
 
-Observed good changes:
-- `shouldHandleKeyEvent()` now allows checkbox/radio inputs.
-- `updateLookAngles()` and `applyLook()` make yaw/pitch cumulative.
-- `data-yaw`, `data-pitch`, and `data-zoom` are exposed for e2e.
-- Scroll-to-zoom was added and tested with synthetic wheel events.
-
-Remaining issues:
-- `tests/e2e/rad-viewer.spec.ts` test `"keyboard movement changes camera position when free nav is enabled"` dispatches synthetic `KeyboardEvent`s inside `page.evaluate()`. This bypasses the real browser focus path and would not catch the checkbox-focus bug the user observed.
-- The existing test that uses `page.keyboard.down('KeyW')` does not assert that keyboard movement changed camera position before disabling free nav.
-- Scroll zoom e2e uses `document.dispatchEvent(new WheelEvent(...))`, not actual Playwright mouse-wheel input over the viewer/canvas.
-- `src/lib/spark/freeNavigation.ts` comments for `applyZoom()` contradict the implementation/tests: the code does `newFov = camera.fov - scrollDelta * sensitivity`, so positive `deltaY` decreases FOV.
-- `.codex-handoff/status.md` reports `Follow-up commit: 5b33240` and `Pushed: no`, while Codex pulled `e0fdb69`.
+Current known implementation details from prior verification:
+- Free navigation is enabled by one checkbox labeled "Free navigation".
+- `src/lib/spark/freeNavigation.ts` contains `computeMoveDirection`, `applyMovement`, `updateLookAngles`, `applyLook`, `applyZoom`, and key filtering.
+- Existing e2e still relied too much on synthetic events for keyboard/wheel behavior.
+- `applyZoom()` uses `newFov = camera.fov - scrollDelta * sensitivity`.
+- The camera starts at FOV 60, `minFov` 10, `maxFov` 90.
 
 ## Files Likely Involved
+- `src/lib/spark/freeNavigation.ts`
+- `src/lib/components/RadViewerScene.svelte`
+- `src/App.svelte` only if checkbox focus handling needs adjustment
 - `tests/e2e/rad-viewer.spec.ts`
-- `src/lib/components/RadViewerScene.svelte` only if real Playwright keyboard/wheel tests expose a runtime issue
-- `src/lib/spark/freeNavigation.ts` for comment/doc cleanup or small helper fixes
-- `AGENTS.md` only if behavior/docs change
+- `tests/unit/freeNavigation.test.ts`
+- `AGENTS.md`
+- `README.md`
 - `.codex-handoff/status.md`
 
 ## Required Fixes
 1. Add real Playwright keyboard navigation coverage.
-   - Add or rewrite an e2e test so it:
-     - starts the viewer;
-     - checks the single "Free navigation" checkbox;
-     - does **not** manually blur/focus a different element unless that is also how the UI behaves;
-     - captures initial camera debug position;
-     - uses `page.keyboard.down('KeyW')` or `page.keyboard.press('KeyW')` / arrow key input;
-     - waits long enough for the rAF movement loop;
-     - uses `page.keyboard.up('KeyW')` if needed;
-     - asserts the camera position changed.
-   - This test must use Playwright keyboard APIs, not only synthetic `window.dispatchEvent()` / `document.dispatchEvent()` from `page.evaluate()`.
-   - Keep the synthetic dispatch test only if useful as a lower-level supplement, not as the main keyboard proof.
+   - Use `page.keyboard.down()` / `page.keyboard.up()` or `page.keyboard.press()` after checking the Free navigation checkbox.
+   - Do not rely only on `window.dispatchEvent()` or `document.dispatchEvent()` from `page.evaluate()`.
+   - The test must prove that keyboard navigation works immediately after enabling the checkbox, matching the user’s reported failure path.
 
-2. Fix keyboard navigation if the real Playwright test fails.
-   - The important scenario is after clicking/checking the checkbox, where the checkbox may retain focus.
-   - A valid fix can be focus management, event filtering, event listener placement, or another robust approach.
-   - Ensure text inputs/textarea/contenteditable still do not consume navigation keys for camera movement.
+2. Fix forward/back semantics.
+   - `W` and Arrow Up should move the camera forward in the direction it is looking.
+   - `S` and Arrow Down should move backward.
+   - `A` and Arrow Left should strafe left.
+   - `D` and Arrow Right should strafe right.
+   - Add unit tests for direction semantics and e2e tests proving at least forward/back move in the expected opposite directions.
+   - If the current coordinate system makes “forward” ambiguous, define it explicitly in code comments and tests from the camera’s actual free-nav yaw/orientation, not from an accidental world-axis sign.
 
-3. Add real Playwright wheel zoom coverage.
-   - Add or rewrite an e2e test so it:
-     - enables free navigation;
-     - moves the mouse over the canvas/viewer;
-     - captures initial `data-zoom`;
-     - uses `page.mouse.wheel(...)`;
-     - asserts `data-zoom` changes and stays within the configured range.
-   - Keep the synthetic `WheelEvent` test only if useful as a supplement, not as the main mouse-wheel proof.
-   - Preserve the test proving wheel does not zoom when free nav is disabled.
+3. Fix zoom-out range and semantics.
+   - The user must be able to zoom both in and out from the initial FOV.
+   - Mouse wheel zoom-out must not stop at the initial FOV 60 unless it reaches the configured `maxFov`.
+   - With current defaults, zoom-out from 60 should be able to increase FOV toward `maxFov` 90.
+   - Reverse the current wheel direction.
+   - Current implementation uses `newFov = camera.fov - scrollDelta * sensitivity`, so positive `deltaY` decreases FOV. Change this convention so:
+     - positive `deltaY` zooms out by increasing FOV toward `maxFov`;
+     - negative `deltaY` zooms in by decreasing FOV toward `minFov`.
+   - Make code, comments, README/AGENTS, and tests agree with this reversed direction.
+   - Add real `page.mouse.wheel(...)` e2e coverage for both zoom-in and zoom-out from initial view.
+   - Keep zoom disabled when free navigation is off.
 
-4. Clean up zoom comments/docs.
-   - Make `applyZoom()` comments match the actual implementation and tests.
-   - Current code: `newFov = camera.fov - scrollDelta * sensitivity`.
-   - Therefore positive `scrollDelta` decreases FOV, and negative `scrollDelta` increases FOV, unless you intentionally change the implementation and tests.
+4. Preserve existing behavior.
+   - Mouse-look yaw/pitch accumulation must remain fixed.
+   - Pitch clamping must remain tested.
+   - Scroll-driven camera tween must still work when free nav is off.
+   - One checkbox must still control mouse look, keyboard navigation, and wheel zoom together.
 
-5. Correct status metadata.
-   - In the final `.codex-handoff/status.md`, do not report `5b33240` or `Pushed: no`.
-   - Report the verified prior implementation commit as `e0fdb69`.
-   - If the final hash is not known before commit, state "final pushed commit containing this report" rather than inventing a hash.
-
-## Constraints
-- Do not remove or weaken the single "Free navigation" checkbox.
-- Do not add separate controls for keyboard, mouse-look, or zoom.
-- Do not remove or weaken the scroll-driven camera tween when free nav is off.
-- Do not make e2e depend on the real remote RAD file; keep the Spark stub path.
-- Do not add Theatre.js.
-- Do not touch unrelated files.
+5. Correct docs and report metadata.
+   - Update `AGENTS.md` and README if input semantics or wheel direction wording changes.
+   - In `.codex-handoff/status.md`, report the verified prior implementation commit as `e0fdb69`.
+   - Do not leave `Pushed: no` after pushing.
+   - If the final hash is not known before commit, say "final pushed commit containing this report" rather than inventing a hash.
 
 ## Acceptance Criteria
-- A Playwright e2e test using `page.keyboard` proves keyboard navigation moves the camera when free nav is enabled immediately after checking the checkbox.
-- Keyboard movement remains disabled when free nav is off.
-- Text input/textarea/contenteditable safety remains covered.
-- A Playwright e2e test using `page.mouse.wheel` proves scroll zoom changes camera FOV in free nav.
-- Wheel zoom remains disabled when free nav is off.
+- Real Playwright keyboard input proves free-navigation keyboard movement works after enabling the checkbox.
+- `W` / Arrow Up moves forward, and `S` / Arrow Down moves backward, not reversed.
+- Direction semantics are covered in unit tests and at least one e2e assertion.
+- Real Playwright mouse wheel input proves zoom-in works with negative `deltaY`.
+- Real Playwright mouse wheel input proves zoom-out works with positive `deltaY`, beyond the initial FOV until the configured maximum.
+- Wheel zoom remains inactive when free navigation is off.
 - Mouse-look yaw/pitch tests remain in place.
-- Zoom comments/docs match the implementation.
-- Status report metadata no longer claims a wrong/unpushed commit.
+- Scroll-driven camera tween still works when free navigation is off.
+- README and AGENTS describe the correct key and zoom behavior.
+- Status report metadata is accurate.
 
 ## Tests to Run
 Run these before finalizing:
@@ -100,6 +95,8 @@ Run these before finalizing:
 - Do not overwrite unrelated user work.
 - Do not remove the declarative `<SparkSplats position={[12, 1, 17]} />` path.
 - Do not add separate navigation controls.
+- Do not remove the scroll-driven camera interaction.
+- Do not make e2e depend on the real remote RAD file.
 - Do not push without `status.md`.
 - Always write `status.md` as the last file modification before committing/pushing.
 - After pushing, do not perform any more verifications or modifications.
