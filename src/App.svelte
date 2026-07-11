@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Canvas } from '@threlte/core'
+  import { Studio } from '@threlte/studio'
   import { onMount } from 'svelte'
   import { WebGLRenderer } from 'three'
   import { validateRadUrl } from '$lib/spark/radUrl'
@@ -111,12 +112,15 @@
         })
       }
     >
-      <RadViewerScene
-        url={activeUrl}
-        {profile}
-        {freeNavEnabled}
-        onReady={handleReady}
-      />
+
+      <!--Studio-->
+        <RadViewerScene
+          url={activeUrl}
+          {profile}
+          {freeNavEnabled}
+          onReady={handleReady}
+        />
+      <!--/Studio-->
     </Canvas>
 
     {#if loading}

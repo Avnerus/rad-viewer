@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { useThrelte, useCamera } from '@threlte/core'
+  import { T, useThrelte, useCamera } from '@threlte/core'
   import { onMount, onDestroy } from 'svelte'
   import { PerspectiveCamera } from 'three'
   import { ScrollTrigger } from 'gsap/ScrollTrigger'
@@ -264,10 +264,15 @@
   }
 </script>
 
+
+<T
+  is={camera}
+/>
+
 <SparkSplats
   {url}
   {profile}
-  position={[12, 1, 17]}
+  position={[5,-6,-5]}
 />
 
 <!-- Visually hidden debug element for e2e tests -->

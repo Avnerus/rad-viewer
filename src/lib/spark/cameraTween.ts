@@ -42,7 +42,7 @@ export function applyCameraPose(
  * Default perspective pose (angled view of the scene).
  */
 export const defaultPerspectivePose: CameraPose = {
-  position: [11, 8, 11],
+  position: [0, 0, -1],
   target: [0, 0, 0],
 }
 
@@ -50,7 +50,7 @@ export const defaultPerspectivePose: CameraPose = {
  * Default top-down pose (looking straight down at the scene center).
  */
 export const defaultTopDownPose: CameraPose = {
-  position: [0, 30, 0],
+  position: [0, 30, -1],
   target: [0, 0, 0],
 }
 

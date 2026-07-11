@@ -103,7 +103,6 @@ body {
 .viewer-stage {
   position: fixed;
   inset: 0;
-  z-index: 1;
 }
 
 /* Scroll spacer — in document flow, provides scroll height */
