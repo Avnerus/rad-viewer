@@ -105,6 +105,54 @@ https://storage.googleapis.com/forge-dev-public/asundqui/rad/260217/cozy-spacesh
 
 `npm run test:e2e` builds with `VITE_E2E_STUB_SPARK=true`, which aliases `@sparkjsdev/spark` to `tests/fixtures/spark-stub.ts`. The stub classes extend `THREE.Object3D` so the app mounts without loading real splat data or requiring GPU-specific WebGL behavior. Production and dev builds always use the real library.
 
+## Screenshotting the Splat Scene with playwright-cli
+
+To capture a screenshot of the 3D canvas splat scene (e.g. for visual verification):
+
+1. **Start the dev server**:
+   ```bash
+   npm run dev &>/tmp/dev-server.log &
+   sleep 3
+   ```
+   The server runs at `http://localhost:5173/`.
+
+2. **Open the browser and navigate**:
+   ```bash
+   playwright-cli open http://localhost:5173/
+   ```
+
+3. **Click Start** to load the sample RAD URL (pre-filled in the text box):
+   ```bash
+   playwright-cli snapshot          # find the Start button ref
+   playwright-cli click e9          # click Start (ref may vary)
+   ```
+
+4. **Wait for the scene to load** — the Spark renderer streams LOD chunks and the GPU will be busy. Wait ~10 seconds:
+   ```bash
+   sleep 10
+   ```
+
+5. **Take the screenshot**. The standard `playwright-cli screenshot` command can time out due to GPU stalls from the heavy WebGL rendering. Use `run-code` instead:
+   ```bash
+   playwright-cli run-code --filename=.playwright-cli/screenshot.js
+   ```
+   Where `.playwright-cli/screenshot.js` contains:
+   ```js
+   async function run(page) {
+     await page.screenshot({ path: '.playwright-cli/splat-scene.png', type: 'png' });
+   }
+   ```
+
+6. **Close the browser**:
+   ```bash
+   playwright-cli close
+   ```
+
+7. **Stop the dev server** when done:
+   ```bash
+   kill %1
+   ```
+
 ## CORS Note
 
 Remote RAD files and their `.radc` chunk files must be served with CORS headers. If a RAD URL fails to load, check that the origin allows cross-origin requests.
