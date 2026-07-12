@@ -132,7 +132,9 @@ To capture a screenshot of the 3D canvas splat scene (e.g. for visual verificati
    sleep 10
    ```
 
-5. **Take the screenshot**. The standard `playwright-cli screenshot` command can time out due to GPU stalls from the heavy WebGL rendering. Use `run-code` instead:
+5. **Take the screenshot**. The standard `playwright-cli screenshot` and `eval` commands can time out due to GPU stalls from the heavy WebGL rendering. All interactions with the loaded scene (screenshots, scrolling, DOM queries) must use `run-code` with a helper script:
+
+   **Screenshot at the current scroll position:**
    ```bash
    playwright-cli run-code --filename=.playwright-cli/screenshot.js
    ```
@@ -142,6 +144,20 @@ To capture a screenshot of the 3D canvas splat scene (e.g. for visual verificati
      await page.screenshot({ path: '.playwright-cli/splat-scene.png', type: 'png' });
    }
    ```
+
+   **Scroll to the end and screenshot** (to verify the camera tween / top-down view):
+   ```bash
+   playwright-cli run-code --filename=.playwright-cli/scroll-and-screenshot.js
+   ```
+   Where `.playwright-cli/scroll-and-screenshot.js` contains:
+   ```js
+   async function run(page) {
+     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+     await page.waitForTimeout(2000);
+     await page.screenshot({ path: '.playwright-cli/splat-scrolled.png', type: 'png' });
+   }
+   ```
+   The `waitForTimeout` gives the camera tween time to complete after scrolling.
 
 6. **Close the browser**:
    ```bash
