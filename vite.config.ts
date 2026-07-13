@@ -1,4 +1,5 @@
 import { svelte } from '@sveltejs/vite-plugin-svelte'
+import { threlteStudio } from '@threlte/studio/vite'
 import { defineConfig } from 'vite'
 import { resolve } from 'path'
 
@@ -11,7 +12,7 @@ const sparkStub = process.env.VITE_E2E_STUB_SPARK === 'true'
   : undefined
 
 export default defineConfig({
-  plugins: [svelte()],
+  plugins: [threlteStudio(), svelte()],
   resolve: {
     alias: {
       $lib: resolve(__dirname, 'src/lib'),

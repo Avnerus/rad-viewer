@@ -5,9 +5,11 @@
 A client-side Threlte/Svelte 5/TypeScript web app for viewing Spark 2.x streaming LOD Gaussian splats from user-provided RAD URLs.
 
 **Key files:**
-- `src/App.svelte` — Root component. Landing screen ↔ viewer state machine. `<Canvas>` lives here. Owns `freeNavEnabled` state and renders the free-navigation checkbox outside the Canvas.
-- `src/lib/components/RadViewerScene.svelte` — Camera setup, ScrollTrigger, free-navigation input handling (keyboard + mouse), and camera debug state element.
-- `src/lib/components/SparkSplats.svelte` — SparkRenderer (imperative) + SplatMesh (Threlte `<T>` declarative) lifecycle. Accepts transform props (`position`, `rotation`, `scale`).
+- `src/App.svelte` — Root component. Landing screen ↔ viewer state machine. `<Canvas>` lives here, wrapped in `<Studio>`. Owns `freeNavEnabled` state and renders the free-navigation checkbox outside the Canvas.
+- `src/lib/components/RadViewerScene.svelte` — Camera setup, ScrollTrigger, free-navigation input handling (keyboard + mouse), and camera debug state element. Mounts `SparkStudioBridge` and `SparkSplats`.
+- `src/lib/components/SparkSplats.svelte` — SplatMesh (Threlte `<T>` declarative) lifecycle only. Accepts transform props (`position`, `rotation`, `scale`). SparkRenderer ownership moved to SparkStudioBridge.
+- `src/lib/components/SparkStudioBridge.svelte` — Manages dual SparkRenderer lifecycle (editor + real-camera) via `createSparkStudioRenderer`. Mounted inside `<Studio>` in RadViewerScene.
+- `src/lib/spark/createSparkStudioRenderer.ts` — Factory for dual SparkRenderer setup. Editor renderer (`enableDriveLod: false`) added to scene; real-camera renderer (`enableDriveLod: true`) drives LOD. Custom `render` routes by `camera.userData.editorCamera`.
 - `src/lib/spark/cameraTween.ts` — Pure camera interpolation logic (unit-testable).
 - `src/lib/spark/freeNavigation.ts` — Pure functions for free-navigation movement, yaw/pitch, and key handling (unit-testable).
 - `src/lib/spark/deviceProfile.ts` — Mobile/iOS detection + Spark performance profile.
@@ -29,14 +31,25 @@ A client-side Threlte/Svelte 5/TypeScript web app for viewing Spark 2.x streamin
 
 ## Spark / Threlte Integration Notes
 
-- **SparkRenderer** is created once in `SparkSplats.svelte` `onMount` with `pagedExtSplats: true` and device-profile options. Added to the Three.js scene imperatively via `scene.add()`. Removed and disposed in `onDestroy`. It is renderer infrastructure and remains imperative.
-- **SplatMesh** is created with `paged: true` for RAD streaming. Owned by Threlte `<T is={mesh} ... />` for declarative transform props (`position`, `rotation`, `scale`). Not added via `scene.add()` — Threlte `<T>` handles scene membership. Disposed in `onDestroy`.
-- **`<SparkSplats>` props**: `url`, `profile`, `position` (default `[0,0,0]`), `rotation` (default `[0,0,0]`), `scale` (default `1`).
+- **SparkRenderer** lifecycle is managed by `SparkStudioBridge.svelte` via `createSparkStudioRenderer()`. Two instances per scene:
+  - **Editor renderer**: `enableLod: true`, `enableDriveLod: false`. Added to the Three scene. Sorts splats for Studio editor camera views but never drives LOD fetching or pager updates.
+  - **Real-camera renderer**: `enableLod: true`, `enableDriveLod: true`. Never added to the scene. Drives LOD selection from the app's real camera. Its `lodInstances` map is shared with the editor renderer before each editor render.
+- **Custom render routing**: `renderer.render(scene, camera)` is overridden to detect `camera.userData.editorCamera === true`. Editor renders copy real renderer's `lodInstances`, set `SparkRenderer.sparkOverride = realRenderer`, render, then restore the previous override in `try/finally`. Real/default camera renders pass through directly.
+- **SplatMesh** is created with `paged: true` for RAD streaming in `SparkSplats.svelte`. Owned by Threlte `<T is={mesh} ... />` for declarative transform props (`position`, `rotation`, `scale`). Not added via `scene.add()` — Threlte `<T>` handles scene membership. Disposed in `onDestroy`.
+- **`<SparkSplats>` props**: `url`, `position` (default `[0,0,0]`), `rotation` (default `[0,0,0]`), `scale` (default `1`). No longer accepts `profile` (SparkRenderer options are handled by SparkStudioBridge).
+- **`<SparkStudioBridge>` props**: `profile` (DeviceProfile). Creates and attaches dual Spark renderers on mount, disposes on destroy. Both `attach` and `dispose` are idempotent.
 - **WebGLRenderer** uses `antialias: false` (splats don't benefit from MSAA).
 - **DPR** is clamped to `Math.min(devicePixelRatio, 2)` on desktop, `1` on mobile.
 - **renderMode="always"** on `<Canvas>` ensures Spark streaming/sorting and ScrollTrigger camera changes render every frame.
 - Camera is registered via `useThrelte().camera.set()` and `useCamera().makeDefaultCameras.add()` in `onMount`.
 - Theatre.js is **not** used.
+
+## Threlte Studio Integration
+
+- `<Studio>` wraps the viewer scene in `App.svelte`. The `threlteStudio()` Vite plugin is registered before `svelte()` in `vite.config.ts`.
+- Studio editor cameras (perspective and orthographic) are marked with `camera.userData.editorCamera = true`. This marker is used by the custom render router to prevent editor cameras from driving Spark LOD.
+- Both Studio editor cameras render splats with their own view-dependent sort while consuming the real camera renderer's current LOD selection.
+- The `onDirty` callback for both Spark renderers is wired to `useThrelte().invalidate`.
 
 ## Scroll Layout
 
@@ -93,6 +106,7 @@ The `freeNavEnabled` state lives in `App.svelte` and is passed as a prop to `Rad
 - SparkRenderer API: https://sparkjs.dev/docs/spark-renderer/
 - SplatMesh API: https://sparkjs.dev/docs/splat-mesh/
 - Threlte docs: https://threlte.xyz/docs/
+- Threlte Studio setup: https://threlte.xyz/docs/reference/studio/getting-started
 - GSAP ScrollTrigger: https://gsap.com/docs/v3/Plugins/ScrollTrigger/
 
 ## Sample RAD URL

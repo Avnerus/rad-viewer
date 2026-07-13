@@ -18,6 +18,7 @@
   } from '$lib/spark/freeNavigation'
   import type { DeviceProfile } from '$lib/types'
   import SparkSplats from './SparkSplats.svelte'
+  import SparkStudioBridge from './SparkStudioBridge.svelte'
 
   interface Props {
     url: string
@@ -269,9 +270,10 @@
   is={camera}
 />
 
+<SparkStudioBridge {profile} />
+
 <SparkSplats
   {url}
-  {profile}
   position={[5,-6,-5]}
 />
 

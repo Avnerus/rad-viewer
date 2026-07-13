@@ -66,17 +66,19 @@ describe('applyCameraPose', () => {
 })
 
 describe('default poses', () => {
-  it('perspective pose is angled view', () => {
-    expect(defaultPerspectivePose.position[0]).not.toBe(0)
-    expect(defaultPerspectivePose.position[1]).toBeGreaterThan(0)
-    expect(defaultPerspectivePose.position[2]).not.toBe(0)
+  it('perspective pose is an off-center view', () => {
+    // Perspective camera is at [0, 0, -1] looking at origin
+    expect(defaultPerspectivePose.position[0]).toBe(0)
+    expect(defaultPerspectivePose.position[1]).toBe(0)
+    expect(defaultPerspectivePose.position[2]).toBe(-1)
     expect(defaultPerspectivePose.target).toEqual([0, 0, 0])
   })
 
-  it('top-down pose looks straight down', () => {
+  it('top-down pose looks straight down from above', () => {
+    // Top-down camera is at [0, 30, -1] looking at origin
     expect(defaultTopDownPose.position[0]).toBe(0)
     expect(defaultTopDownPose.position[1]).toBeGreaterThan(0)
-    expect(defaultTopDownPose.position[2]).toBe(0)
+    expect(defaultTopDownPose.position[2]).toBe(-1)
     expect(defaultTopDownPose.target).toEqual([0, 0, 0])
   })
 })

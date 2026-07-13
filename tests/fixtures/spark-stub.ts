@@ -10,6 +10,10 @@
 import { Object3D } from 'three'
 
 export class SparkRenderer extends Object3D {
+  static sparkOverride: SparkRenderer | undefined
+
+  lodInstances = new Map<unknown, { lodId: number; numSplats: number; indices: Uint32Array; texture: unknown }>()
+
   constructor(_options?: Record<string, unknown>) {
     super()
   }

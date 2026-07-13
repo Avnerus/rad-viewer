@@ -113,14 +113,14 @@
       }
     >
 
-      <!--Studio-->
+      <Studio>
         <RadViewerScene
           url={activeUrl}
           {profile}
           {freeNavEnabled}
           onReady={handleReady}
         />
-      <!--/Studio-->
+      </Studio>
     </Canvas>
 
     {#if loading}
