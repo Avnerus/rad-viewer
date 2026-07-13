@@ -146,37 +146,62 @@ describe('createSparkStudioRenderer', () => {
   })
 
   describe('camera routing', () => {
-    it('routes editor camera through sparkOverride path', () => {
-      const handle = createSparkStudioRenderer(baseOptions)
-      handle.attach(scene, renderer)
+    it('sets sparkOverride to editorRenderer during editor camera render', () => {
+      const originalFn = vi.fn()
+      const mockRenderer = {
+        ...makeMockRenderer(),
+        render: originalFn,
+      } as unknown as THREE.WebGLRenderer
+      const handle = createSparkStudioRenderer({ ...baseOptions, renderer: mockRenderer })
+      handle.attach(scene, mockRenderer)
 
       const editorCamera = new THREE.PerspectiveCamera()
       editorCamera.userData.editorCamera = true
 
-      const renderSpy = vi.spyOn(renderer, 'render')
+      // Observe sparkOverride INSIDE the raw render call
+      originalFn.mockImplementation(() => {
+        expect(SparkRenderer.sparkOverride).toBe(handle.editorRenderer)
+        expect((SparkRenderer.sparkOverride as SparkRenderer).enableDriveLod).toBe(false)
+      })
 
-      renderer.render(scene, editorCamera)
+      mockRenderer.render(scene, editorCamera)
 
-      // sparkOverride should have been set and restored
+      // After render, override is restored
       expect(SparkRenderer.sparkOverride).toBeUndefined()
-      expect(renderSpy).toHaveBeenCalled()
     })
 
-    it('routes real/default camera without sparkOverride', () => {
-      const handle = createSparkStudioRenderer(baseOptions)
-      handle.attach(scene, renderer)
+    it('sets sparkOverride to realRenderer during real/default camera render', () => {
+      const originalFn = vi.fn()
+      const mockRenderer = {
+        ...makeMockRenderer(),
+        render: originalFn,
+      } as unknown as THREE.WebGLRenderer
+      const handle = createSparkStudioRenderer({ ...baseOptions, renderer: mockRenderer })
+      handle.attach(scene, mockRenderer)
 
       const realCamera = new THREE.PerspectiveCamera()
       realCamera.userData.editorCamera = false
 
-      renderer.render(scene, realCamera)
+      // Observe sparkOverride INSIDE the raw render call
+      originalFn.mockImplementation(() => {
+        expect(SparkRenderer.sparkOverride).toBe(handle.realRenderer)
+        expect((SparkRenderer.sparkOverride as SparkRenderer).enableDriveLod).toBe(true)
+      })
 
+      mockRenderer.render(scene, realCamera)
+
+      // After render, override is restored
       expect(SparkRenderer.sparkOverride).toBeUndefined()
     })
 
     it('shares lodInstances from real to editor before editor render', () => {
-      const handle = createSparkStudioRenderer(baseOptions)
-      handle.attach(scene, renderer)
+      const originalFn = vi.fn()
+      const mockRenderer = {
+        ...makeMockRenderer(),
+        render: originalFn,
+      } as unknown as THREE.WebGLRenderer
+      const handle = createSparkStudioRenderer({ ...baseOptions, renderer: mockRenderer })
+      handle.attach(scene, mockRenderer)
 
       const realR = handle.realRenderer!
       const editorR = handle.editorRenderer!
@@ -190,59 +215,113 @@ describe('createSparkStudioRenderer', () => {
       const editorCamera = new THREE.PerspectiveCamera()
       editorCamera.userData.editorCamera = true
 
-      renderer.render(scene, editorCamera)
+      mockRenderer.render(scene, editorCamera)
 
       // Editor should now have the shared instances
+      expect(editorR.lodInstances.get(mockMesh)).toBe(lodData)
+    })
+
+    it('shares lodInstances after real camera render for next editor frame', () => {
+      const originalFn = vi.fn()
+      const mockRenderer = {
+        ...makeMockRenderer(),
+        render: originalFn,
+      } as unknown as THREE.WebGLRenderer
+      const handle = createSparkStudioRenderer({ ...baseOptions, renderer: mockRenderer })
+      handle.attach(scene, mockRenderer)
+
+      const realR = handle.realRenderer!
+      const editorR = handle.editorRenderer!
+
+      const mockMesh = {} as unknown as THREE.Object3D
+      const lodData = { lodId: 42, numSplats: 200, indices: new Uint32Array(200), texture: {} as THREE.DataTexture }
+      realR.lodInstances.set(mockMesh, lodData)
+      editorR.lodInstances.clear()
+
+      const realCamera = new THREE.PerspectiveCamera()
+      realCamera.userData.editorCamera = false
+
+      mockRenderer.render(scene, realCamera)
+
+      // After real render, editor should have received the shared instances
       expect(editorR.lodInstances.get(mockMesh)).toBe(lodData)
     })
   })
 
   describe('override restoration', () => {
     it('restores sparkOverride after successful editor render', () => {
-      const handle = createSparkStudioRenderer(baseOptions)
-      handle.attach(scene, renderer)
+      const originalFn = vi.fn()
+      const mockRenderer = {
+        ...makeMockRenderer(),
+        render: originalFn,
+      } as unknown as THREE.WebGLRenderer
+      const handle = createSparkStudioRenderer({ ...baseOptions, renderer: mockRenderer })
+      handle.attach(scene, mockRenderer)
 
       const editorCamera = new THREE.PerspectiveCamera()
       editorCamera.userData.editorCamera = true
-
-      SparkRenderer.sparkOverride = undefined
-      renderer.render(scene, editorCamera)
-      expect(SparkRenderer.sparkOverride).toBeUndefined()
-    })
-
-    it('restores sparkOverride when render throws', () => {
-      const handle = createSparkStudioRenderer(baseOptions)
-      handle.attach(scene, renderer)
-
-      // Make the underlying render throw
-      const throwingRenderer = makeMockRenderer()
-      ;(throwingRenderer.render as ReturnType<typeof vi.fn>).mockImplementation(() => {
-        throw new Error('GPU error')
-      })
-
-      const handle2 = createSparkStudioRenderer({ ...baseOptions, renderer: throwingRenderer })
-      handle2.attach(scene, throwingRenderer)
-
-      SparkRenderer.sparkOverride = 'previous-value' as unknown as SparkRenderer
-
-      const editorCamera = new THREE.PerspectiveCamera()
-      editorCamera.userData.editorCamera = true
-
-      expect(() => throwingRenderer.render(scene, editorCamera)).toThrow('GPU error')
-      expect(SparkRenderer.sparkOverride).toBe('previous-value' as unknown as SparkRenderer)
-    })
-
-    it('preserves a pre-existing sparkOverride value', () => {
-      const handle = createSparkStudioRenderer(baseOptions)
-      handle.attach(scene, renderer)
 
       const previousOverride = {} as unknown as SparkRenderer
       SparkRenderer.sparkOverride = previousOverride
 
+      mockRenderer.render(scene, editorCamera)
+      expect(SparkRenderer.sparkOverride).toBe(previousOverride)
+    })
+
+    it('restores sparkOverride after successful real camera render', () => {
+      const originalFn = vi.fn()
+      const mockRenderer = {
+        ...makeMockRenderer(),
+        render: originalFn,
+      } as unknown as THREE.WebGLRenderer
+      const handle = createSparkStudioRenderer({ ...baseOptions, renderer: mockRenderer })
+      handle.attach(scene, mockRenderer)
+
+      const realCamera = new THREE.PerspectiveCamera()
+      realCamera.userData.editorCamera = false
+
+      const previousOverride = {} as unknown as SparkRenderer
+      SparkRenderer.sparkOverride = previousOverride
+
+      mockRenderer.render(scene, realCamera)
+      expect(SparkRenderer.sparkOverride).toBe(previousOverride)
+    })
+
+    it('restores sparkOverride when editor render throws', () => {
+      const throwingFn = vi.fn(() => { throw new Error('GPU error') })
+      const throwingRenderer = {
+        ...makeMockRenderer(),
+        render: throwingFn,
+      } as unknown as THREE.WebGLRenderer
+      const handle = createSparkStudioRenderer({ ...baseOptions, renderer: throwingRenderer })
+      handle.attach(scene, throwingRenderer)
+
       const editorCamera = new THREE.PerspectiveCamera()
       editorCamera.userData.editorCamera = true
 
-      renderer.render(scene, editorCamera)
+      const previousOverride = {} as unknown as SparkRenderer
+      SparkRenderer.sparkOverride = previousOverride
+
+      expect(() => throwingRenderer.render(scene, editorCamera)).toThrow('GPU error')
+      expect(SparkRenderer.sparkOverride).toBe(previousOverride)
+    })
+
+    it('restores sparkOverride when real camera render throws', () => {
+      const throwingFn = vi.fn(() => { throw new Error('GPU error') })
+      const throwingRenderer = {
+        ...makeMockRenderer(),
+        render: throwingFn,
+      } as unknown as THREE.WebGLRenderer
+      const handle = createSparkStudioRenderer({ ...baseOptions, renderer: throwingRenderer })
+      handle.attach(scene, throwingRenderer)
+
+      const realCamera = new THREE.PerspectiveCamera()
+      realCamera.userData.editorCamera = false
+
+      const previousOverride = {} as unknown as SparkRenderer
+      SparkRenderer.sparkOverride = previousOverride
+
+      expect(() => throwingRenderer.render(scene, realCamera)).toThrow('GPU error')
       expect(SparkRenderer.sparkOverride).toBe(previousOverride)
     })
   })

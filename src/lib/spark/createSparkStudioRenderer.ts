@@ -14,11 +14,11 @@ import type { SparkRendererOptions } from '@sparkjsdev/spark'
  * - **Real-camera renderer**: `enableLod: true`, `enableDriveLod: true`. Never
  *   added to the scene. Drives LOD selection from the application's real camera.
  *   Its `lodInstances` map is shared with the editor renderer before each
- *   editor render via `SparkRenderer.sparkOverride`.
+ *   editor render.
  *
  * The custom Three `render` function routes by `camera.userData.editorCamera`:
- *   - Editor camera → copy real renderer's lodInstances → sparkOverride → render
- *   - Real/default camera → real renderer drives and renders normally
+ *   - Editor camera → copy real renderer's lodInstances → sparkOverride = editorRenderer → render
+ *   - Real/default camera → sparkOverride = realRenderer → render → share lodInstances for next editor frame
  */
 export interface SparkStudioRendererHandle {
   /**
@@ -88,6 +88,21 @@ export function createSparkStudioRenderer(
     }
   }
 
+  function renderWithOverride(
+    override: SparkRenderer,
+    scene: THREE.Scene,
+    camera: THREE.Camera,
+    rawRender: (scene: THREE.Scene, camera: THREE.Camera) => void,
+  ): void {
+    const previous = SparkRenderer.sparkOverride
+    try {
+      SparkRenderer.sparkOverride = override
+      rawRender(scene, camera)
+    } finally {
+      SparkRenderer.sparkOverride = previous
+    }
+  }
+
   function buildCustomRender(): void {
     if (!attachedRenderer || !realRenderer || !editorRenderer) return
 
@@ -96,18 +111,13 @@ export function createSparkStudioRenderer(
 
     attachedRenderer.render = (scene: THREE.Scene, camera: THREE.Camera): void => {
       if (camera.userData.editorCamera === true) {
-        // Editor camera render: share LOD from real renderer, use sparkOverride
+        // Editor camera: share LOD from real renderer, render through editorRenderer (no LOD driving)
         shareLodInstances()
-        const previous = SparkRenderer.sparkOverride
-        try {
-          SparkRenderer.sparkOverride = realRenderer
-          originalRender!(scene, camera)
-        } finally {
-          SparkRenderer.sparkOverride = previous
-        }
+        renderWithOverride(editorRenderer!, scene, camera, originalRender!)
       } else {
-        // Real/default camera render: use driving renderer directly
-        originalRender!(scene, camera)
+        // Real/default camera: render through realRenderer (drives LOD), then share for next editor frame
+        renderWithOverride(realRenderer!, scene, camera, originalRender!)
+        shareLodInstances()
       }
     }
   }

@@ -34,7 +34,9 @@ A client-side Threlte/Svelte 5/TypeScript web app for viewing Spark 2.x streamin
 - **SparkRenderer** lifecycle is managed by `SparkStudioBridge.svelte` via `createSparkStudioRenderer()`. Two instances per scene:
   - **Editor renderer**: `enableLod: true`, `enableDriveLod: false`. Added to the Three scene. Sorts splats for Studio editor camera views but never drives LOD fetching or pager updates.
   - **Real-camera renderer**: `enableLod: true`, `enableDriveLod: true`. Never added to the scene. Drives LOD selection from the app's real camera. Its `lodInstances` map is shared with the editor renderer before each editor render.
-- **Custom render routing**: `renderer.render(scene, camera)` is overridden to detect `camera.userData.editorCamera === true`. Editor renders copy real renderer's `lodInstances`, set `SparkRenderer.sparkOverride = realRenderer`, render, then restore the previous override in `try/finally`. Real/default camera renders pass through directly.
+- **Custom render routing**: `renderer.render(scene, camera)` is overridden to detect `camera.userData.editorCamera === true`. Both paths use `try/finally` to set and restore `SparkRenderer.sparkOverride`:
+  - Editor camera → copy real renderer's `lodInstances` → `sparkOverride = editorRenderer` → render → restore
+  - Real/default camera → `sparkOverride = realRenderer` → render → restore → share `lodInstances` to editor for next frame
 - **SplatMesh** is created with `paged: true` for RAD streaming in `SparkSplats.svelte`. Owned by Threlte `<T is={mesh} ... />` for declarative transform props (`position`, `rotation`, `scale`). Not added via `scene.add()` — Threlte `<T>` handles scene membership. Disposed in `onDestroy`.
 - **`<SparkSplats>` props**: `url`, `position` (default `[0,0,0]`), `rotation` (default `[0,0,0]`), `scale` (default `1`). No longer accepts `profile` (SparkRenderer options are handled by SparkStudioBridge).
 - **`<SparkStudioBridge>` props**: `profile` (DeviceProfile). Creates and attaches dual Spark renderers on mount, disposes on destroy. Both `attach` and `dispose` are idempotent.
