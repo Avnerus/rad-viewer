@@ -8,24 +8,26 @@ import type { SparkRendererOptions } from '@sparkjsdev/spark'
  *
  * - **Editor renderer**: `enableLod: true`, `enableDriveLod: false`. Added to
  *   the Three scene so it receives `onBeforeRender` calls for every render pass.
- *   It sorts splats for the editor camera's view but never drives LOD fetching
+ *   It sorts splats for the current camera's view but never drives LOD fetching
  *   or pager updates.
  *
  * - **Real-camera renderer**: `enableLod: true`, `enableDriveLod: true`. Never
  *   added to the scene. Drives LOD selection from the application's real camera.
- *   Its `lodInstances` map is shared with the editor renderer before each
- *   editor render.
+ *   Its `lodInstances` map is shared with the editor renderer so that editor
+ *   renders display the same LOD selection.
  *
- * The custom Three `render` function routes by `camera.userData.editorCamera`:
- *   - Editor camera → copy real renderer's lodInstances → sparkOverride = editorRenderer → render
- *   - Real/default camera → sparkOverride = realRenderer → render → share lodInstances for next editor frame
+ * The editor renderer's `onBeforeRender` is wrapped to detect editor cameras
+ * (`camera.userData.editorCamera === true`). For editor cameras it shares LOD
+ * from the real renderer and renders normally (using itself). For real/default
+ * cameras it drives the real renderer's LOD update via `sparkOverride`, then
+ * falls through to the normal editor-renderer path.
  */
 export interface SparkStudioRendererHandle {
   /**
    * Attach this handle to a scene/renderer pair.
    * Safe to call multiple times (idempotent — no-op if already attached).
    */
-  attach(scene: THREE.Scene, renderer: THREE.WebGLRenderer): void
+  attach(scene: THREE.Scene): void
 
   /**
    * Dispose both Spark renderers and clean up. Safe to call multiple times.
@@ -53,8 +55,6 @@ export function createSparkStudioRenderer(
   let editorRenderer: SparkRenderer | null = null
   let realRenderer: SparkRenderer | null = null
   let attachedScene: THREE.Scene | null = null
-  let attachedRenderer: THREE.WebGLRenderer | null = null
-  let originalRender: ((scene: THREE.Scene, camera: THREE.Camera) => void) | null = null
   let disposed = false
 
   function createRenderers(): void {
@@ -88,68 +88,54 @@ export function createSparkStudioRenderer(
     }
   }
 
-  function renderWithOverride(
-    override: SparkRenderer,
-    scene: THREE.Scene,
-    camera: THREE.Camera,
-    rawRender: (scene: THREE.Scene, camera: THREE.Camera) => void,
-  ): void {
-    const previous = SparkRenderer.sparkOverride
-    try {
-      SparkRenderer.sparkOverride = override
-      rawRender(scene, camera)
-    } finally {
-      SparkRenderer.sparkOverride = previous
-    }
-  }
+  function wrapOnBeforeRender(): void {
+    if (!editorRenderer || !realRenderer) return
 
-  function buildCustomRender(): void {
-    if (!attachedRenderer || !realRenderer || !editorRenderer) return
+    const originalOnBeforeRender = editorRenderer.onBeforeRender.bind(editorRenderer)
 
-    // Capture the original render method reference to avoid recursion through the overridden method
-    originalRender = attachedRenderer.render as (scene: THREE.Scene, camera: THREE.Camera) => void
-
-    attachedRenderer.render = (scene: THREE.Scene, camera: THREE.Camera): void => {
+    editorRenderer.onBeforeRender = (
+      renderer: THREE.WebGLRenderer,
+      scene: THREE.Scene,
+      camera: THREE.Camera,
+    ): void => {
       if (camera.userData.editorCamera === true) {
-        // Editor camera: share LOD from real renderer, render through editorRenderer (no LOD driving)
+        // Editor camera: share LOD from real renderer, then render normally
         shareLodInstances()
-        renderWithOverride(editorRenderer!, scene, camera, originalRender!)
+        originalOnBeforeRender(renderer, scene, camera)
       } else {
-        // Real/default camera: render through realRenderer (drives LOD), then share for next editor frame
-        renderWithOverride(realRenderer!, scene, camera, originalRender!)
+        // Real/default camera: drive LOD via real renderer using sparkOverride,
+        // then render normally through editor renderer which picks up the data
+        const previous = SparkRenderer.sparkOverride
+        try {
+          SparkRenderer.sparkOverride = realRenderer
+          originalOnBeforeRender(renderer, scene, camera)
+        } finally {
+          SparkRenderer.sparkOverride = previous
+        }
         shareLodInstances()
       }
     }
   }
 
-  function restoreOriginalRender(): void {
-    if (attachedRenderer && originalRender) {
-      attachedRenderer.render = originalRender
-      originalRender = null
-    }
-  }
-
-  function attach(scene: THREE.Scene, renderer: THREE.WebGLRenderer): void {
+  function attach(scene: THREE.Scene): void {
     if (disposed) return
-    if (attachedScene === scene && attachedRenderer === renderer) return // idempotent
+    if (attachedScene === scene) return // idempotent
 
     createRenderers()
     if (!editorRenderer || !realRenderer) return
 
     attachedScene = scene
-    attachedRenderer = renderer
 
     // Add only the editor renderer to the scene
     scene.add(editorRenderer)
 
-    buildCustomRender()
+    // Wrap onBeforeRender to route LOD driving by camera type
+    wrapOnBeforeRender()
   }
 
   function dispose(): void {
     if (disposed) return
     disposed = true
-
-    restoreOriginalRender()
 
     // Remove only the scene-owned editor renderer
     if (editorRenderer && attachedScene) {
@@ -164,7 +150,6 @@ export function createSparkStudioRenderer(
     editorRenderer = null
     realRenderer = null
     attachedScene = null
-    attachedRenderer = null
   }
 
   return {

@@ -1,34 +1,36 @@
 ## Summary
 
-Fixed the dual-`SparkRenderer` routing defect discovered in Codex verification. The previous implementation inverted the override identities: editor-camera renders used `realRenderer` as the `sparkOverride` and real-camera renders had no override at all. This meant the LOD-driving renderer was being updated with Studio editor camera positions, and the non-driving scene renderer handled real-camera renders.
+Fixed a runtime crash caused by the dual-`SparkRenderer` routing strategy. The previous approach (commit `b645578`/`805e6cb`) overrode `WebGLRenderer.render` to set `SparkRenderer.sparkOverride` for the entire render call. This broke Three.js's internal render pipeline because:
 
-Corrected routing:
-- **Editor camera** (`camera.userData.editorCamera === true`) → `sparkOverride = editorRenderer` (`enableDriveLod: false`) — sorts splats for editor view, never drives LOD.
-- **Real/default camera** → `sparkOverride = realRenderer` (`enableDriveLod: true`) — drives LOD from real camera position. Shares `lodInstances` to editor renderer after render for the next editor frame.
+1. The override was active during the full scene traversal, affecting all nested render calls (including Studio's DefaultCamera pane which calls `renderer.render()` directly).
+2. When `sparkOverride` pointed to a SparkRenderer not in the scene, Spark's `onBeforeRender` (firing on the scene-attached `editorRenderer`) would use the override's internal state (`display`, `orderingTexture`, accumulators) that was not initialized for that rendering context, causing `TypeError: Cannot read properties of undefined (reading 'localClippingEnabled')` deep in Three.js's shadow-map render path.
 
-Both paths use the same `renderWithOverride()` helper with `try/finally` restoration of any pre-existing override value.
+**Fix**: Replaced the `WebGLRenderer.render` override with a surgical `editorRenderer.onBeforeRender` wrap. The wrap detects `camera.userData.editorCamera` and routes accordingly:
+
+- **Editor camera**: Share `lodInstances` from real renderer, then call original `onBeforeRender` directly (no `sparkOverride` — Spark uses `this` = `editorRenderer` naturally).
+- **Real/default camera**: Set `sparkOverride = realRenderer`, call original `onBeforeRender` (Spark's `const spark = sparkOverride ?? this` picks up `realRenderer`, which drives LOD), restore override in `try/finally`, then share `lodInstances` for the next editor frame.
+
+This matches Spark's own portal pattern: the scene-attached renderer handles rendering via `onBeforeRender`, while the off-scene renderer drives LOD through `sparkOverride` only during the specific `onBeforeRender` call that needs it.
 
 ## Files changed
 
 | File | Purpose |
 |------|---------|
-| `src/lib/spark/createSparkStudioRenderer.ts` | Fixed routing: editor → `editorRenderer` override, real → `realRenderer` override. Extracted `renderWithOverride()` helper. Added post-real-render `shareLodInstances()`. Updated module doc comment. |
-| `tests/unit/createSparkStudioRenderer.test.ts` | Rewrote camera routing and override restoration tests (23 tests, +2). Tests now assert `sparkOverride` identity *inside* the raw render mock via `originalFn.mockImplementation`. Added error-path restoration for both editor and real camera branches. |
-| `AGENTS.md` | Corrected render routing description to reflect editor override = editorRenderer, real override = realRenderer. |
+| `src/lib/spark/createSparkStudioRenderer.ts` | Replaced `WebGLRenderer.render` override with `editorRenderer.onBeforeRender` wrap. Removed `attachedRenderer` tracking and `restoreOriginalRender`. Removed `renderer` param from `attach()`. |
+| `src/lib/components/SparkStudioBridge.svelte` | Removed `renderer` from `attach()` call. |
+| `tests/unit/createSparkStudioRenderer.test.ts` | Rewrote all routing/override tests to use prototype mocking (set before attach so bound original captures the mock). Tests now verify `sparkOverride` identity inside the mocked `onBeforeRender` for both camera paths, including error-path restoration. |
+| `AGENTS.md` | Updated render routing description to reflect `onBeforeRender` wrap approach. |
 
 ## Acceptance criteria
 
-- **[x]** During raw render for Studio editor camera, `SparkRenderer.sparkOverride` is exactly `editorRenderer` with `enableDriveLod: false`. Verified by `originalFn.mockImplementation` assertion inside render call.
-- **[x]** During raw render for real/default camera, `SparkRenderer.sparkOverride` is exactly `realRenderer` with `enableDriveLod: true`. Verified by `originalFn.mockImplementation` assertion inside render call.
-- **[x]** Editor-camera rendering cannot drive Spark LOD — `enableDriveLod: false` on editorRenderer.
-- **[x]** Real/default-camera rendering is the sole LOD driver — `enableDriveLod: true` on realRenderer.
-- **[x]** Editor rendering consumes real renderer's `lodInstances` (shared before editor render) and retains editor-camera sort/view.
-- **[x]** Both camera paths restore prior override after success (4 tests) and after exception (2 tests).
-- **[x]** Unit tests observe `sparkOverride` *inside* the raw render mock, not after restoration.
-- **[x]** Error-path restoration covers both editor and real/default cameras.
-- **[x]** Existing lifecycle, profile-option, LOD-sharing, and disposal tests remain green.
-- **[x]** `AGENTS.md` accurately describes editor override = editorRenderer, real override = realRenderer.
-- **[x]** Status report acknowledges the routing defect and describes the correction.
+- **[x]** Editor camera renders through `editorRenderer` (`enableDriveLod: false`). Verified: `sparkOverride` is undefined during editor camera `onBeforeRender` (Spark uses `this`).
+- **[x]** Real/default camera renders with `sparkOverride = realRenderer` (`enableDriveLod: true`). Verified: `sparkOverride` is `realRenderer` inside `onBeforeRender` for real camera.
+- **[x]** Editor-camera rendering cannot drive Spark LOD — `enableDriveLod: false` on editorRenderer, no override set.
+- **[x]** Real/default-camera rendering is the sole LOD driver — `sparkOverride = realRenderer` during its `onBeforeRender`.
+- **[x]** Editor rendering consumes real renderer's `lodInstances` (shared before editor `onBeforeRender`).
+- **[x]** Both camera paths restore prior override after success and after exception (4 tests).
+- **[x]** Studio Editor Camera button works without crash — verified in browser via playwright-cli. Splats render correctly from editor camera view with grid, gizmo, and Default Camera preview pane visible.
+- **[x]** Zero console errors during Studio editor camera activation.
 - **[x]** `npm run test:unit` passes (89/89).
 - **[x]** `npm run check` passes (0 errors, 0 warnings).
 - **[x]** `npm run lint` passes (0 errors, 0 warnings).
@@ -39,19 +41,14 @@ Both paths use the same `renderWithOverride()` helper with `try/finally` restora
 
 File: `tests/unit/createSparkStudioRenderer.test.ts` (23 tests)
 
-**Camera routing (4 tests):**
-- `sets sparkOverride to editorRenderer during editor camera render` — asserts identity and `enableDriveLod: false` inside raw render
-- `sets sparkOverride to realRenderer during real/default camera render` — asserts identity and `enableDriveLod: true` inside raw render
-- `shares lodInstances from real to editor before editor render`
-- `shares lodInstances after real camera render for next editor frame`
+**Renderer creation/options** (6): two instances, correct `enableDriveLod`/`enableLod` flags, profile options passthrough
+**Attach idempotence** (2): editor added once, real never added
+**onBeforeRender wrapping** (5): wrap applied, editor shares lodInstances before call, real sets `sparkOverride = realRenderer` inside call, editor does not set override, real shares lodInstances after call
+**Override restoration** (4): preserves pre-existing value for both camera types, restores on throw for both camera types
+**Disposal** (5): both disposed, editor removed from scene, multiple dispose safe, references nulled, attach-after-dispose no-op
+**Type contract** (1): handle shape
 
-**Override restoration (4 tests):**
-- `restores sparkOverride after successful editor render` — preserves pre-existing value
-- `restores sparkOverride after successful real camera render` — preserves pre-existing value
-- `restores sparkOverride when editor render throws` — try/finally on editor path
-- `restores sparkOverride when real camera render throws` — try/finally on real path
-
-**Existing tests (15 tests):** creation/options (6), attach idempotence (2), disposal (6), type contract (1) — all remain green.
+All routing tests use `SparkRenderer.prototype.onBeforeRender` mocking set **before** `attach()` so the bound original inside the wrap captures the mock, enabling in-call observation of `sparkOverride`.
 
 ## Verification
 
@@ -61,15 +58,17 @@ Commands run and results:
 npm run test:unit   → 89 passed (5 test files)
 npm run check       → 0 errors, 0 warnings
 npm run lint        → 0 errors, 0 warnings
-npm run build       → built in 4.48s, success
+npm run build       → success
 ```
+
+Browser verification via playwright-cli: Studio Editor Camera activated, splats rendering correctly, zero console errors.
 
 E2E tests were **not** run per mission instructions.
 
 ## Risks or follow-ups
 
-- **None identified.** The corrected routing matches the intended design and Spark's own multi-view pattern. All paths tested with in-render assertions.
+- **None identified.** The `onBeforeRender` wrap approach is stable and matches Spark's own multi-view pattern. Browser verification confirms the Studio editor camera works without crashes.
 
 ## Commit
 
-`ad9a058` pushed to `main`.
+To be filled after push.

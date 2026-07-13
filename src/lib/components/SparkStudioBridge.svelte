@@ -30,7 +30,7 @@
     }
 
     const studioHandle = createSparkStudioRenderer(sparkOptions)
-    studioHandle.attach(scene, renderer)
+    studioHandle.attach(scene)
     handle = { dispose: studioHandle.dispose }
   })
 
