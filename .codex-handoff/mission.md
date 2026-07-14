@@ -1,322 +1,254 @@
-# Mission: ScrollAnimator authoring extension for Threlte Studio
+# Follow-up mission: make ScrollAnimator authoring genuinely usable and lifecycle-safe
 
 ## Objective
 
-Replace the hard-coded two-pose camera tween and all free-navigation behavior with a reusable scroll-keyframed `ScrollAnimator` Object3D plus a Threlte Studio authoring extension.
+Correct the first ScrollAnimator implementation without redesigning the accepted feature. Retain GSAP ScrollTrigger with boolean `scrub: true`, the `ScrollAnimator` keyframe model, Studio source transactions, the camera/CameraTarget hierarchy, and the removal of free navigation.
 
-Retain GSAP ScrollTrigger as the optimized scroll-progress driver. Use boolean `scrub: true`, never a numeric scrub duration, so animator progress is directly tied to scrollbar progress and does not continue easing after scrolling stops.
+The current implementation passes its reported tests but does not yet satisfy the mission in actual authoring use. Fix the concrete gaps below, add regression coverage that interacts with the real UI rather than bypassing it, perform the required manual source-write verification, update documentation, and produce an accurate final status report.
 
-An author must be able to select a `ScrollAnimator` in Studio, jump/scroll to a percentage, pose it with Studio transform controls, insert or update a keyframe, inspect/delete its keyframes, and have keyframe data persisted into the selected animator's literal `<T ... keyframes={...}>` node in Svelte source. Runtime scrolling interpolates every `ScrollAnimator`. The real camera is parented by one animator and always looks at a new `CameraTarget`, which is parented by a second animator.
+## Verified problems to fix
 
-Interpret the request to remove the “Free transform” checkbox as removal of the existing **Free navigation** checkbox and all associated implementation/tests.
-
-Relevant official documentation:
-
-- Threlte authoring extensions: https://threlte.xyz/docs/reference/studio/authoring-extensions/
-- Threlte object selection: https://threlte.xyz/docs/reference/studio/use-object-selection/
-- Threlte transactions/source sync: https://threlte.xyz/docs/reference/studio/use-transactions/
-- GSAP ScrollTrigger: https://gsap.com/docs/v3/Plugins/ScrollTrigger/
-
-The installed version is `@threlte/studio` 0.4.3. Its public extension surface includes `useStudio`, `ToolbarItem`, `ToolbarButton`, and `DropDownPane` from `@threlte/studio/extend`, plus `useObjectSelection` and `useTransactions` from `@threlte/studio/extensions`.
+1. **The extension pane toggle does not open the pane.** `ScrollAnimatorExtension.svelte` passes a custom `toggle` callback to `DropDownPane` that only flips `extension.state.paneVisible`; it never calls the pane's `show()`/`hide()` behavior that changes `.tooltip.style.display`. E2E tests conceal this by directly setting `.tooltip.style.display = 'block'` with `page.evaluate()`.
+2. **Scroll playback is not generic.** `applyScrollAnimators()` hard-codes only `cameraAnimator` and `targetAnimator`, while the feature and `AGENTS.md` claim one trigger drives every scene `ScrollAnimator`. A newly added animator would never play.
+3. **The WebGLRenderer render wrapper is unsafe.** `RadViewerScene.svelte` replaces `renderer.render`, never restores it on destroy, and can stack stale closures when leaving/re-entering the viewer. This also creates an unnecessary second render wrapper beside the Spark/Studio integration.
+4. **The extension does not consume ScrollTrigger's progress/range.** It polls DOM geometry every 100 ms and jumps using an independently calculated spacer range. This can disagree with ScrollTrigger after refresh and does not meet the accepted trigger-range design.
+5. **Typing a percentage is unstable.** The 100 ms interval continually replaces `percentageInput`, including while the user is editing it.
+6. **Undo/redo can leave the keyframe list stale.** Transaction writes update `animator.keyframes`, but the selection-derived effect does not react to that plain property change.
+7. **HMR-safe branding is undermined by `instanceof`.** Selection accepts the `isScrollAnimator` brand, then list/actions require `instanceof ScrollAnimator`, which can reject a branded instance across HMR/class replacement.
+8. **Unnecessary private Studio imports and Vite aliases were added.** Installed Studio 0.4.3 publicly exports `useObjectSelection` and `useTransactions` from `@threlte/studio/extensions`; `useTransactions()` exposes `vitePluginEnabled`, and `buildTransaction()` derives source metadata from the object's Studio metadata. The local aliases/types add fragility and 33 lint warnings.
+9. **Keyframe canonicalization does not deduplicate raw frames that normalize to the same percentage.** This can leave ambiguous brackets/source after clamping/rounding.
+10. **Required evidence is missing.** The report describes code/unit behavior but does not document the manual dev source-write experiment required by the mission. It also claims completion despite 33 lint warnings.
+11. **Finalization protocol was not followed.** Commit `f518acd` changed tests after `status.md` was written, so the report omits the final commit/state.
 
 ## Files likely involved
 
-Keep discovery targeted. Likely files to add/change/remove:
-
-- `src/App.svelte`
-- `src/app.css`
 - `src/lib/components/RadViewerScene.svelte`
-- New runtime/controller component if useful, such as `src/lib/components/ScrollAnimatorRuntime.svelte`
-- New `src/lib/studio/scroll-animator/ScrollAnimatorExtension.svelte`
-- New supporting extension types/helpers in `src/lib/studio/scroll-animator/`
-- New `src/lib/spark/ScrollAnimator.ts`
-- New pure keyframe helpers such as `src/lib/spark/scrollAnimation.ts`
-- `src/lib/types.ts` if shared public types belong there
+- `src/lib/spark/scrollAnimation.ts`
+- `src/lib/spark/ScrollAnimator.ts`
+- `src/lib/studio/scroll-animator/ScrollAnimatorExtension.svelte`
+- New shared runtime bridge/store, preferably `src/lib/studio/scroll-animator/scrollAnimatorRuntime.svelte.ts` or a similarly scoped module
+- `src/lib/studio/scroll-animator/transactionGuard.ts`
+- Remove `src/lib/studio/scroll-animator/studio-types.d.ts`
+- `src/gsap.d.ts` only for accurate types actually used
+- `vite.config.ts` to remove private Studio aliases
+- `tests/unit/scrollAnimation.test.ts`
+- `tests/unit/transactionGuard.test.ts`
+- New tests for the runtime bridge/store if created
 - `tests/e2e/rad-viewer.spec.ts`
-- New unit/component tests for scroll animation and the extension transaction guard
-- Remove `src/lib/spark/freeNavigation.ts`
-- Remove `tests/unit/freeNavigation.test.ts`
-- Remove or replace obsolete `src/lib/spark/cameraTween.ts` and `tests/unit/cameraTween.test.ts`
-- Keep `src/gsap.d.ts`, `gsap`, and the existing GSAP package entries unless a targeted type correction is needed
 - `AGENTS.md`
+- `.codex-handoff/status.md` as the final file modification
 
-Do not scan unrelated repository areas.
+Do not scan or change unrelated repository areas.
 
-## Detailed design
+## Required design
 
-### 1. Keyframe model and interpolation
+### 1. Use ScrollTrigger as the single progress/range authority
 
-Use a serializable, source-friendly shape. A recommended contract is:
+Create a small shared runtime bridge owned by the app scene but readable by the Studio extension. It must expose at least:
+
+- current percentage as reactive Svelte state;
+- the active ScrollTrigger instance/range;
+- attach/detach lifecycle guarded by instance identity;
+- `updateProgress(progress01)` called from initial setup and `onUpdate`;
+- `jumpToPercentage(percent)` using the active trigger's measured `start`, `end`, and `scroll()`.
+
+Suggested shape (adapt to Svelte 5 conventions and actual types):
 
 ```ts
-export type Vec3Tuple = [number, number, number]
+class ScrollAnimatorRuntime {
+  percentage = $state(0)
+  private trigger: ScrollTriggerInstance | null = null
 
-export type ScrollKeyframe = {
-  /** Percentage in the inclusive range 0..100. */
-  scroll: number
-  position: Vec3Tuple
-  /** XYZ Euler radians, stored for readable source authoring. */
-  rotation: Vec3Tuple
+  attach(trigger: ScrollTriggerInstance) {
+    this.trigger = trigger
+    this.updateProgress(trigger.progress)
+  }
+
+  detach(trigger: ScrollTriggerInstance) {
+    if (this.trigger === trigger) this.trigger = null
+  }
+
+  updateProgress(progress: number) {
+    this.percentage = clampPercentage(progress * 100)
+  }
+
+  jumpToPercentage(percent: number) {
+    if (!this.trigger) return
+    this.trigger.scroll(
+      percentageToScroll(percent, this.trigger.start, this.trigger.end),
+    )
+  }
 }
 ```
 
-Create pure functions for:
+Reset stale state appropriately when the viewer unmounts. Do not poll with `setInterval`, do not independently calculate spacer geometry in the extension, and do not use raw `window.scrollTo` for authored percentage jumps.
 
-- clamping/normalizing percentage values;
-- canonicalizing keyframes (deep copy, clamp, deterministic sort);
-- upserting at a percentage (same normalized percentage replaces, never duplicates);
-- deleting at a percentage;
-- finding the bracketing keyframes;
-- sampling a transform at any percentage.
+Keep exactly one `ScrollTrigger.create` with literal boolean `scrub: true`. No numeric scrub, tween, timeline, raw scroll listener, or continuous animator-transform task.
 
-Behavior must be explicit and tested:
+### 2. Drive every scene ScrollAnimator
 
-- zero keyframes: do not mutate the animator;
-- one keyframe: use it at every percentage;
-- before first/after last: clamp to the endpoint transform;
-- exact keyframe percentage: reproduce that keyframe exactly;
-- duplicate insertion: replace the existing frame;
-- position: `Vector3.lerp` semantics;
-- rotation: store Euler XYZ values, but convert endpoint rotations to quaternions and use shortest-path quaternion slerp. Do not component-lerp Euler angles across ±π;
-- source precision should be stable (Studio defaults to four decimals). Choose and document a deterministic percentage precision so wheel-scroll noise does not create near-duplicate frames. A percentage precision of 2–3 decimals is sufficient.
-
-Do not animate scale; the requested animator contract is position + rotation.
-
-### 2. `ScrollAnimator` as a real Object3D
-
-Implement `ScrollAnimator` as a class extending Three.js `Object3D`, not merely a wrapper component. Give it an HMR-safe brand such as `isScrollAnimator = true`, a useful `type = 'ScrollAnimator'`, and a `keyframes` property/setter that accepts plain serialized arrays and owns canonical deep copies.
-
-It should expose an imperative method similar to:
+On initial trigger application and every ScrollTrigger `onUpdate`, traverse the Threlte scene (or use a correctly cleaned registry) and apply the percentage to every branded object:
 
 ```ts
-applyScrollPercentage(percent: number): void
-```
-
-That method samples the current keyframes and applies local `position` and `quaternion`/`rotation` only when a sample exists.
-
-Use distinct class instances directly in `RadViewerScene.svelte`. This is important for Studio's source metadata:
-
-```svelte
-<T
-  is={cameraAnimator}
-  name="Camera ScrollAnimator"
-  keyframes={[
-    { scroll: 0, position: [0, 0, -1], rotation: [0, 0, 0] },
-    { scroll: 100, position: [0, 30, -1], rotation: [0, 0, 0] }
-  ]}
->
-  <T is={camera} name="PerspectiveCamera" />
-</T>
-
-<T
-  is={targetAnimator}
-  name="Camera Target ScrollAnimator"
-  keyframes={[
-    { scroll: 0, position: [0, 0, 0], rotation: [0, 0, 0] }
-  ]}
->
-  <T is={cameraTarget} name="CameraTarget" />
-</T>
-```
-
-The exact formatting/default transforms can differ, but preserve the current initial perspective-to-top-down motion and fixed-origin target as initial authored keyframes.
-
-Do **not** hide these two per-instance `<T>` nodes inside a reusable Svelte wrapper. Studio 0.4.3 attaches source sync metadata to literal `<T>` nodes by module id and component index; a wrapper would point both uses at the wrapper implementation rather than at independent keyframe attributes in `RadViewerScene.svelte`.
-
-### 3. Retain ScrollTrigger as the runtime progress driver
-
-Keep GSAP and `ScrollTrigger`. Remove only the old hard-coded camera-pose sampling.
-
-Create one ScrollTrigger for the existing `.scroll-spacer` range. It should resemble:
-
-```ts
-scrollTrigger = ScrollTrigger.create({
-  trigger: spacer,
-  start: 'top top',
-  end: 'bottom bottom',
-  scrub: true,
-  onUpdate: ({ progress }) => {
-    applyScrollAnimators(progress * 100)
-  },
+scene.traverse((object) => {
+  if (isScrollAnimator(object)) {
+    object.applyScrollPercentage(percent)
+  }
 })
 ```
 
-Critical ScrollTrigger invariants:
+Use a structural/HMR-safe type guard that verifies the brand and callable method. Do not require `instanceof` in runtime or extension logic. Keep the two literal camera/target `<T>` nodes for source metadata, but do not special-case them in playback.
 
-- `scrub` must be boolean `true`; do not use `scrub: 0.5`, `scrub: 1`, or any numeric smoothing duration;
-- do not attach the animators to a GSAP tween/timeline whose playhead can keep changing after scrollbar movement stops;
-- apply animator transforms only from ScrollTrigger progress changes, plus one explicit initial application after creation;
-- do not run a per-frame/effect loop that reapplies animator positions or rotations;
-- let ScrollTrigger retain its requestAnimationFrame synchronization, scroll-event debouncing, and automatic resize/refresh calculations;
-- cleanly kill the trigger on destroy;
-- preserve the fixed canvas + `.scroll-spacer` document layout.
+Update debug state after world matrices are current; it must remain world-space and reflect target/camera changes made while stationary where relevant.
 
-With boolean scrub, ScrollTrigger progress is directly linked to scrollbar progress. This preserves GSAP's optimized scheduling without allowing delayed scrub updates to overwrite a stationary Studio gizmo edit.
+### 3. Use a Threlte task for camera look-at
 
-A small scene traversal for branded `ScrollAnimator` instances inside `onUpdate` is acceptable and makes future animators work without manual registration. Alternatively maintain an explicit registry with correct register/unregister cleanup. Keep one ScrollTrigger, not one trigger per animator.
-
-Expose the trigger's current percentage reactively to the authoring extension without making runtime playback depend on Studio being enabled.
-
-Programmatic percentage jumps should use the ScrollTrigger's measured range after refresh, not make an independent guess that can drift from it:
+Remove the `renderer.render = ...` assignment entirely. Use public `useTask` from `@threlte/core`:
 
 ```ts
-const targetScroll = trigger.start + (clampedPercent / 100) * (trigger.end - trigger.start)
-trigger.scroll(targetScroll)
+useTask(() => {
+  cameraTarget.getWorldPosition(targetWorld)
+  camera.lookAt(targetWorld)
+  updateDebugState()
+}, { autoInvalidate: false })
 ```
 
-If the public typings used by the project do not expose `start`, `end`, or `scroll`, update the narrow local declaration accurately. Do not fall back to `document.body.scrollHeight`. A helper based on `ScrollTrigger.maxScroll(window)` is also acceptable if it exactly matches the configured trigger range.
+Reuse `Vector3` scratch instances rather than allocating every frame. Confirm the task is automatically cleaned up with the component and that it runs in the normal Threlte render schedule before rendering. Do not alter `SparkStudioBridge` or `createSparkStudioRenderer`.
 
-Creating the trigger must establish the correct initial pose at the current progress, including reload/browser scroll restoration. Do this once during setup; do not introduce continuous reapplication.
+### 4. Make the extension pane work through public UI behavior
 
-### 4. Camera and `CameraTarget` hierarchy
+Use `DropDownPane`'s normal default toggle behavior. The simplest correct form is:
 
-- Parent the real `PerspectiveCamera` under `Camera ScrollAnimator`.
-- Create a named `CameraTarget` `Object3D` and parent it under a second `ScrollAnimator`.
-- The real camera must always look at `CameraTarget`'s **world position**, including while an author is moving either animator with Studio gizmos.
-- Update look-at after parent world matrices are current. A lightweight Threlte render task that only updates camera orientation is appropriate; it must not write either animator's position/rotation.
-- Because look-at defines the final viewing direction, it intentionally wins over the camera object's own orientation. Generic animator rotation remains supported and affects ordinary children (and any offset child position), but do not let camera rotation fight the target constraint.
-- Keep existing default-camera registration through Threlte context and preserve the Spark real-camera/editor-camera renderer routing.
-- Camera debug state must report camera and target **world** positions after parenting. Remove free-navigation-only debug attributes (`data-freenav`, yaw, pitch, zoom) and update tests accordingly.
+```svelte
+<ToolbarItem position="left">
+  <div class="scroll-animator-extension">
+    <DropDownPane title="Scroll Animator">
+      <!-- UI -->
+    </DropDownPane>
+  </div>
+</ToolbarItem>
+```
 
-### 5. Studio extension UI
+Do not override `toggle` unless invoking the component's actual `show()`/`hide()` API. Persistent open state is not required. Add a stable wrapper/test selector so E2E can click the extension's real `Toggle Pane` button without confusing it with other Studio panes.
 
-Register the custom extension through `<Studio extensions={[ScrollAnimatorExtension]}>`.
+Remove every E2E `page.evaluate()` that forces `.tooltip` display or directly invokes extension DOM button `.click()` merely to bypass user interaction. Tests must click the real toggle and visible keyframe buttons through Playwright locators.
 
-Use `createExtension` with a unique scope and include the required scene slot/snippet. Use `useObjectSelection()` to derive the selected object. The UI is active only when exactly one branded `ScrollAnimator` is selected; otherwise show a concise “Select one ScrollAnimator” state and disable mutation controls.
+Verify the pane and Studio toolbar stay fixed by comparing their viewport bounding boxes before and after page scrolling.
 
-Add a Studio toolbar item with a fixed `DropDownPane` (or equivalent fixed top Studio pane) containing:
+### 5. Make percentage editing stable
 
-1. Current ScrollTrigger percentage, live-updated from trigger progress.
-2. A numeric input allowing 0..100; commit on Enter/change/blur, clamp invalid values, and scroll there automatically through the trigger range.
-3. A sorted list of the selected animator's keyframes.
-4. A clickable percentage for each row that jumps to that trigger percentage.
-5. A delete button for each row.
-6. One clearly labelled `Insert/save scroll keyframe` button.
+Read current percentage from the shared ScrollTrigger runtime. Remove the interval and geometry helpers.
 
-Native HTML controls inside the exported `DropDownPane` are acceptable and avoid depending directly on Studio's transitive `svelte-tweakpane-ui` package. Make buttons keyboard accessible and provide useful disabled/empty states.
+Keep a separate draft string for the numeric input. Sync the draft from runtime percentage only while the input is not focused/being edited. On Enter or blur:
 
-The Studio toolbar is already implemented as a fixed Tweakpane at `y=6`; the new pane must remain fixed and usable while the document scrolls. Verify this behavior rather than adding a competing page-level toolbar. Ensure the app's viewer header does not obscure Studio authoring controls; adjust z-index/offset only as needed.
+- parse and clamp;
+- jump through the runtime bridge;
+- restore a valid formatted draft;
+- avoid a double commit from Enter followed by blur if it would cause observable trouble.
 
-Insert/save captures the selected animator's current **local** position and XYZ Euler rotation at the current normalized percentage. It upserts an existing frame at that percentage. The list must update immediately.
+The current percentage display should continue updating from ScrollTrigger while normal scrolling occurs.
 
-Clicking a keyframe changes ScrollTrigger's scroll position; the resulting progress update applies that saved pose. Editing with transform controls after the jump remains untouched until ScrollTrigger progress changes again.
+### 6. Use only public Studio extension APIs
 
-### 6. Persist only keyframes, never live animator transforms
+Use:
 
-This is a critical invariant.
+```ts
+import { useObjectSelection, useTransactions } from '@threlte/studio/extensions'
+```
 
-Studio's built-in transform controls call the transaction extension with source sync enabled for `position`, `rotation`, and `scale`. For branded `ScrollAnimator` objects, the custom extension must prevent these ordinary transactions from entering Studio's source-sync queue, while leaving runtime transform and undo/redo behavior intact. The only source-synced attribute allowed on a `ScrollAnimator` is `keyframes`.
+Obtain `vitePluginEnabled` from the returned transactions API. `buildTransaction({ object, propertyPath: 'keyframes', ... })` already constructs sync metadata from `object.userData.threlteStudio`; do not import `getThrelteStudioUserData` or override `tx.sync` unless a real manual source-write test proves the public API insufficient.
 
-A practical approach for Studio 0.4.3 is to subscribe with `useTransactions().onTransaction(...)`. The queue invokes these callbacks before it enqueues sync requests on commit, undo, and redo. For transactions whose object is a `ScrollAnimator`, clear/suppress `transaction.sync` unless its final `attributeName` is exactly `keyframes`. Extract the predicate/mutation into a small testable helper. Unsubscribe on component destruction.
+Remove the four private Vite aliases and delete `studio-types.d.ts`. Do not import private `Transaction` types. Define a narrow local structural transaction type for the guard, e.g. object plus optional sync/attributeName, without `any`.
 
-Do not remove `userData.threlteStudio`; the extension needs that metadata to persist the correct literal `<T>` node and Studio uses it for other source-aware actions.
+The transaction guard must continue to suppress all ScrollAnimator source attributes except the final `keyframes` segment. Handle possible `pathItems` safely (e.g. allow `keyframes` or an attribute name ending in `.keyframes`) while ensuring transform props remain blocked on commit, undo, and redo.
 
-Insert/update/delete should commit one undoable transaction which:
+### 7. Keep extension keyframes reactive across transactions
 
-- reads/writes cloned canonical `keyframes` arrays on the selected animator;
-- immediately updates runtime UI state;
-- includes source sync metadata targeting the selected `<T>` node's `keyframes` attribute;
-- uses the source metadata's `moduleId`, component `index`, and any `pathItems` correctly;
-- serializes only plain data (no `Vector3`, `Euler`, or `Quaternion` instances).
+After commit, undo, or redo, refresh the selected animator's displayed keyframes from its getter. Reuse the transaction subscription so guard behavior and UI refresh occur consistently, or introduce a small explicit revision state.
 
-`buildTransaction({ object, propertyPath: 'keyframes', ... })` may be used if cloning/history semantics are correct; otherwise construct the public transaction shape explicitly. Confirm insert, replacement, delete, undo, and redo do not alias/mutate historic arrays.
+History arrays must remain deep-cloned. Do not assign `animator.keyframes` redundantly after `transactions.commit()` if the transaction write already did so.
 
-When `useTransactions().vitePluginEnabled` is false (for example a production preview), playback and percentage jumping still work, but source-mutating save/delete controls must be disabled with a clear “Studio source sync unavailable” explanation. Do not claim that an in-memory edit was persisted.
+All extension operations must use the HMR-safe branded structural type, not `instanceof ScrollAnimator`.
 
-### 7. Remove obsolete navigation and hard-coded tween code
+### 8. Canonicalize duplicate percentages deterministically
 
-Remove all existing free-navigation state, props, checkbox/hint markup, CSS, keyboard/mouse/wheel listeners, RAF loop, pure helpers, and free-navigation tests.
+`canonicalizeKeyframes()` must collapse entries whose percentages become equal after clamp/round. Define deterministic last-write-wins behavior, preserve sorted order, and deep-copy all tuples. Add cases for raw duplicates, rounding collisions, and clamp collisions at 0 and 100.
 
-The hard-coded `cameraTween` module is superseded by generic keyframe sampling. Remove it and its tests if nothing else uses it.
+### 9. Eliminate warnings and correct declarations
 
-Keep GSAP, ScrollTrigger registration, the narrow local ScrollTrigger type declaration, and dependency entries. Update the declaration as needed for the runtime controller and percentage-jump API. Do not remove GSAP from `package.json` or `package-lock.json`.
+Remove unused imports and all `no-explicit-any` warnings introduced by this feature. `npm run lint` must report zero errors and zero warnings.
 
-Do not leave compatibility branches, dead debug fields, or stale AGENTS documentation describing free navigation/fixed-origin look-at.
+Correct `src/gsap.d.ts` to the actual GSAP API used. In particular, official ScrollTrigger `maxScroll()` returns a number, not `{ y: number }`; remove unused declarations rather than guessing them.
 
-## Additional constraints and caveats
+## Manual source-authoring verification (mandatory)
 
-- Do not persist extension UI state as the source of truth for keyframes. Authored Svelte `keyframes` props are the source of truth.
-- Do not write `position`, `rotation`, `scale`, or other transform attributes onto a `ScrollAnimator` `<T>` node as a side effect of Studio editing, including undo/redo.
-- Do not let reactive keyframe/list updates continuously reapply the sampled pose. Only initial trigger setup and ScrollTrigger `onUpdate` drive playback transforms.
-- Do not use numeric scrub smoothing. Boolean `scrub: true` is mandatory.
-- Avoid shared mutable keyframe arrays between source props, animator, transaction history, and UI.
-- Treat multi-selection as unsupported and disabled rather than guessing which object to edit.
-- Use local transforms for keyframes so parenting remains composable; use world transforms only for camera look-at/debug reporting.
-- Preserve selection when jumping to a keyframe.
-- Deleting the last frame is allowed; the animator then keeps its current transform until another keyframe is authored.
-- A programmatic jump to the already-current pixel may not change trigger progress. Do not introduce a continuous reapplication workaround. If explicit reapplication is needed, route it through the same named trigger update function and document the exception.
-- Source persistence is a dev-authoring capability. Authored playback must remain deterministic in production without RPC/HMR.
-- Keep Svelte 5 syntax and the existing TypeScript/check conventions.
+After automated tests pass, run the application in dev mode with the real Studio Vite integration and perform this controlled experiment:
+
+1. Select `Camera ScrollAnimator` using the Studio hierarchy.
+2. Open the extension pane by clicking its real toolbar toggle.
+3. Jump to a percentage, move/rotate the animator with Studio controls, stop, and wait. Confirm boolean scrub does not snap it back while scroll progress is stationary.
+4. Inspect the source diff: gizmo manipulation must not add/change `position`, `rotation`, `scale`, or another transform attribute on the animator `<T>`.
+5. Click `Insert/save scroll keyframe`; wait for source sync and confirm the correct literal `<T>` node's `keyframes={...}` changes.
+6. Save again at the same normalized percentage and confirm replacement rather than duplication.
+7. Delete that frame and confirm the correct source/list change.
+8. Exercise undo and redo and confirm both source and visible list remain consistent.
+9. Confirm the target animator can be authored independently.
+10. Restore only the temporary experiment keyframes before final tests/reporting.
+
+Record exact observed source-diff evidence in `status.md`. Code inspection or unit tests alone do not satisfy this requirement.
 
 ## Acceptance criteria
 
-- A real `ScrollAnimator extends Object3D` supports authored position/rotation keyframes at 0..100% and deterministic interpolation.
-- Position interpolates linearly; rotation uses shortest-path quaternion slerp from source-stored XYZ Euler radians.
-- One retained GSAP ScrollTrigger drives all animators with boolean `scrub: true` and no GSAP tween/timeline or numeric scrub catch-up.
-- The runtime applies animators during initial trigger setup and when ScrollTrigger progress changes; Studio gizmo edits are not overwritten while trigger progress is stationary.
-- ScrollTrigger retains requestAnimationFrame-synchronized/debounced updates and refresh-aware range calculation.
-- Studio has a fixed-top extension pane showing current percentage, percentage input, selected animator keyframes, jump actions, delete actions, and `Insert/save scroll keyframe`.
-- The extension operates only for exactly one selected `ScrollAnimator` and has clear disabled/empty states.
-- Typing/clicking a percentage maps through ScrollTrigger's measured start/end range and the UI percentage tracks trigger progress.
-- Insert at a new percentage adds a sorted keyframe; insert at the same normalized percentage updates it; delete removes it; undo/redo behaves correctly.
-- Keyframe mutations write a literal `keyframes={...}` value to the selected animator's `<T>` node in Svelte source when Vite source sync is available.
-- Moving/rotating/scaling a selected `ScrollAnimator` with built-in Studio controls never writes transform props into Svelte source, including through undo/redo.
-- Source mutation controls are disabled with a clear explanation when Vite source sync is unavailable; runtime playback still works.
-- The real camera is a child of one animator. A named `CameraTarget` is a child of another animator. The real camera continuously looks at the target's world position.
-- Initial authored keyframes preserve the current perspective → top-down scroll behavior and origin target before the author changes them.
-- Camera debug values and e2e assertions use world-space camera/target positions and no longer expose free-nav state.
-- Free-navigation UI/code/styles/listeners/RAF/helpers/tests are gone.
-- Hard-coded camera-pose tween code/tests are gone, while GSAP/ScrollTrigger and their dependencies remain.
-- Fixed canvas, scroll spacer, landing/URL flow, Spark streaming, dual SparkRenderer routing, editor-camera behavior, device profiling, and declarative SplatMesh ownership remain intact.
-- `AGENTS.md` is updated with concise current architecture, authoring workflow, source references, important invariants, and tests. It must not become a chronological implementation log.
-- All required checks pass and the branch is pushed with the implementation and final status report.
+- The extension pane opens and closes through its real toolbar control; no CSS/display test bypass is needed.
+- Studio toolbar and extension pane remain fixed in the viewport while document scrolling changes.
+- One GSAP ScrollTrigger with boolean `scrub: true` drives every branded ScrollAnimator in the scene.
+- Newly added/future scene ScrollAnimator instances require no hard-coded playback call.
+- The extension percentage and jumps use the active trigger's `progress`, `start`, `end`, and `scroll()` through one runtime bridge.
+- There is no polling interval, independent spacer-percentage math, raw window jump, numeric scrub, or animator-transform RAF/effect loop.
+- Numeric percentage typing is not overwritten while focused and commits correctly on Enter/blur.
+- Camera look-at uses `useTask`; `renderer.render` is never replaced by `RadViewerScene` and cannot stack across viewer remounts.
+- Camera and target debug state is world-space and updates correctly.
+- Selection/actions use an HMR-safe structural brand, not `instanceof ScrollAnimator`.
+- Public `@threlte/studio/extensions` imports are used; private Studio aliases, declarations, metadata import, and transaction type imports are gone.
+- Source-sync unavailable state still disables only mutation controls with a clear message; playback, current percentage, typed jumps, and keyframe jumps remain useful.
+- Insert/update/delete/undo/redo immediately keep the visible keyframe list and animator data consistent with independent arrays.
+- Only `keyframes` is source-synced for ScrollAnimator objects; transform attributes remain blocked through commit/undo/redo.
+- Raw duplicate/rounded/clamped keyframe percentages canonicalize deterministically to one frame per percentage.
+- Manual dev verification proves correct keyframe source writes and proves gizmo transforms do not write transform props.
+- Existing Spark dual-renderer routing, editor-camera LOD safety, splat lifecycle, fixed canvas/scroll spacer, URL flow, and device behavior are unchanged.
+- Free navigation remains removed and GSAP remains installed.
+- `npm run check`, `npm run lint`, `npm run test:unit`, `npm run test:e2e`, and `npm run build` pass; lint has zero warnings.
+- `AGENTS.md` accurately describes the final implementation without false claims about traversal, renderer wrapping, or private APIs.
+- Final `status.md` describes the exact last pushed source/test state and no commit modifies files after it is written.
 
-Before finalizing, re-check every acceptance criterion explicitly. Do not rely only on green tests.
+Re-check every acceptance criterion explicitly before finalizing.
 
-## Tests and verification to run
+## Tests to add or correct
 
-Create new tests for the new feature. At minimum:
+### Unit/component tests
 
-### Unit tests
-
-- percentage clamp/normalization;
-- keyframe canonical sorting/deep cloning;
-- upsert new frame and replace normalized duplicate;
-- delete frame;
-- sampling zero, one, and multiple keyframes;
-- exact endpoints, between frames, and outside range;
-- linear position interpolation;
-- quaternion shortest-path rotation across the ±π boundary;
-- `ScrollAnimator.applyScrollPercentage` does nothing with zero frames and applies local transforms otherwise;
-- ScrollTrigger range-to-percentage and percentage-to-scroll mapping helpers, including zero-length range;
-- transaction guard suppresses source sync for ScrollAnimator transform/other attributes on commit/undo/redo-shaped transactions but allows `keyframes`;
-- keyframe transaction history uses independent arrays (no aliasing).
-
-### Component/extension tests where practical
-
-- no selection, non-animator selection, multi-selection, and one animator selection states;
-- percentage input clamping/jump behavior through the trigger seam;
-- sorted list rendering and button state;
-- insert/update/delete calls the correct transaction seam;
-- source-sync-unavailable state disables persistence controls.
-
-Mock the ScrollTrigger and transaction/source seams. Automated tests must not rewrite checked-in Svelte source.
+- Runtime bridge attach/update/jump/detach, trigger replacement, zero range, and no stale trigger after viewer teardown.
+- Scene-wide application helper applies to every branded animator and ignores ordinary Object3Ds.
+- Structural brand works for an object not constructed by the current `ScrollAnimator` class.
+- Duplicate canonicalization: exact duplicates, 2-decimal rounding collisions, values clamped together at 0/100, deterministic last-write-wins.
+- Guard supports public/narrow transaction shape, blocks transform/other attributes, allows root/path-prefixed keyframes, and behaves on commit/undo/redo callbacks.
+- Extension keyframe-list refresh seam after commit, undo, and redo if practical without disk writes.
+- Percentage draft does not update while editing and commits through the runtime bridge.
 
 ### E2E tests
 
-- existing landing, URL validation, canvas, and back navigation behavior;
-- free-navigation controls are absent;
-- initial camera and target debug world positions are correct;
-- scrolling moves the camera animator toward its last keyframe;
-- target debug position comes from `CameraTarget`, not a hard-coded origin;
-- after scrolling stops, moving a selected animator is not overwritten by later scrub/ticker activity;
-- extension toolbar/pane remains fixed at the top while document scroll changes;
-- current percentage follows ScrollTrigger progress;
-- selecting the camera animator in the Studio hierarchy reveals its frames and clicking a frame jumps to its percentage, if stable with the existing Studio UI.
+- Select camera animator and click the **real** extension toggle; verify pane content appears, then close/reopen it.
+- Scroll and assert toolbar/pane viewport position remains fixed.
+- Type a multi-character percentage through Playwright keyboard input and verify the jump/progress; do not set input values through DOM evaluation.
+- Click a visible keyframe button normally and verify camera/progress.
+- Verify the source-sync-unavailable branch while retaining visible percentage/jump controls.
+- Select a real non-ScrollAnimator deterministically and verify the disabled state; do not make the selection conditional.
+- Navigate viewer → landing → viewer and verify look-at/render behavior has no stacked stale callback regression.
+- Add a test-only third ScrollAnimator fixture if a safe seam exists and prove scene-wide playback; otherwise cover traversal in unit/component tests.
 
-Do not make an e2e save/delete click against the real dev source unless the test uses an isolated temporary fixture and proves cleanup. Prefer mocked component coverage for disk mutation.
+Automated tests must never mutate checked-in Svelte source. Remove all direct tooltip style manipulation and direct DOM click bypasses from E2E.
 
-Run:
+Run and report:
 
 ```bash
 npm run check
@@ -326,72 +258,60 @@ npm run test:e2e
 npm run build
 ```
 
-Also perform one deliberate manual dev-authoring verification before the final report:
-
-1. Start the viewer in dev mode and select `Camera ScrollAnimator`.
-2. Scroll, stop, wait longer than a plausible scrub duration, move the animator, and confirm ScrollTrigger does not snap it back while progress is stationary.
-3. Confirm the trigger uses literal `scrub: true` and no numeric scrub/timeline catch-up.
-4. Inspect the source diff and confirm transform controls did not add/update `position`, `rotation`, or `scale` on that animator node.
-5. Save a keyframe and confirm only its `keyframes` source value changes.
-6. Update the same percentage and confirm it replaces rather than duplicates.
-7. Delete a frame and verify source/list/runtime behavior.
-8. Confirm the Studio UI remains fixed while scrolling.
-9. Confirm the camera looks at the animated target in both app camera and Studio editor contexts without regressing Spark LOD routing.
-
-If this manual source-authoring verification intentionally changes checked-in initial keyframes, restore only those test edits before final verification. Do not discard unrelated user changes.
+Trustworthy report output must give exact test counts and exact warning counts.
 
 ## Things Pi must not change
 
-- Do not remove GSAP or ScrollTrigger; do not replace them with raw window scroll listeners.
-- Do not add numeric scrub smoothing or a delayed GSAP tween/timeline for animator progress.
-- Do not alter SparkRenderer dual-instance ownership/routing or the `sparkOverride` try/finally invariant.
-- Do not let Studio editor cameras drive Spark LOD.
-- Do not change SplatMesh paging/lifecycle, its current scene transform, or Threlte declarative ownership.
-- Do not change RAD URL validation, sample URL, query-string behavior, landing flow, or loading/back behavior except to remove free-navigation state reset.
-- Do not change device profiles, DPR policy, WebGL antialias policy, or continuous Canvas rendering.
-- Do not replace Threlte Studio or add Theatre.js.
-- Do not make keyframes live only in localStorage/Studio persisted extension state.
-- Do not add a source-writing API outside the existing Threlte Studio Vite transaction mechanism unless the public mechanism is proven insufficient and the status report explains the evidence and smallest necessary deviation.
-- Do not mutate repository source from automated tests.
-- Do not modify unrelated files or overwrite unrelated working-tree changes.
+- Do not remove GSAP/ScrollTrigger or change boolean `scrub: true` to numeric scrub.
+- Do not reintroduce the hard-coded camera tween or free navigation.
+- Do not change the keyframe source shape unless required to fix a demonstrated bug.
+- Do not change SparkStudioBridge, `createSparkStudioRenderer`, Spark override routing, editor-camera markers, LOD ownership, or renderer count.
+- Do not replace or wrap `WebGLRenderer.render` in the scene.
+- Do not change SplatMesh paging/lifecycle/transform or Threlte declarative ownership.
+- Do not change URL validation, sample URL, landing/loading/back behavior, device profile, DPR, WebGL settings, Canvas render mode, or scroll-spacer height.
+- Do not add Theatre.js or a second animation system.
+- Do not access private Studio modules when public extension APIs cover the requirement.
+- Do not mutate source files from automated tests.
+- Do not discard or rewrite unrelated user changes.
 
 ## AGENTS.md update
 
-Update `AGENTS.md` with concise, fresh-session-useful information:
+Update `AGENTS.md` concisely with:
 
-- `ScrollAnimator` model and source location;
-- retained ScrollTrigger boolean-scrub runtime invariant;
-- Studio extension UI and authoring steps;
-- source-sync guard invariant (only `keyframes` persists for animator objects);
-- camera/CameraTarget hierarchy and world-space look-at;
-- relevant debug attributes and tests;
-- removal of free navigation and the hard-coded camera-pose tween;
-- official Threlte extension/selection/transaction and GSAP ScrollTrigger links.
+- scene-wide branded ScrollAnimator traversal/registry behavior;
+- shared ScrollTrigger runtime bridge and boolean-scrub invariant;
+- public Studio extension imports and source transaction guard;
+- real pane authoring workflow;
+- `useTask` camera-target look-at lifecycle;
+- current debug/test references;
+- manual source-authoring caveat.
 
-Keep it architectural and reference-oriented, not a full implementation log.
+Remove claims about renderer wrapping, polling, private aliases, or behavior that is not true in final code. Keep architecture/source references, not an implementation diary.
 
 ## Expected completion report
 
-Write `.codex-handoff/status.md` with:
+Overwrite `.codex-handoff/status.md` with:
 
-1. **Summary** — concise implemented behavior.
-2. **Files changed** — added/modified/deleted, grouped by purpose.
-3. **Design decisions** — keyframe shape/precision, retained ScrollTrigger ownership and boolean scrub, rotation interpolation, source transaction strategy, transform sync guard, camera look-at ordering.
-4. **Acceptance criteria audit** — every criterion above marked met/not met with evidence.
-5. **Tests added** — exact new/updated coverage.
-6. **Verification results** — exact commands and pass/fail summaries, including the manual Studio source-authoring verification.
-7. **Source-write evidence** — what changed when saving a keyframe and evidence that gizmo transforms did not write animator transform props.
-8. **GSAP evidence** — confirmation that ScrollTrigger remains, uses `scrub: true`, and has no delayed numeric scrub/timeline overwrite.
-9. **Known issues/deviations** — anything incomplete, flaky, version-specific, or intentionally different, with rationale.
-10. **Commits pushed** — commit ids and current branch.
+1. **Summary**
+2. **Files changed** (added/modified/deleted)
+3. **Each verified problem above and its resolution**
+4. **Acceptance criteria audit**, one row per criterion with concrete evidence
+5. **Tests added/changed** with exact coverage
+6. **Automated verification results** with commands, counts, errors, and warnings
+7. **Manual source-authoring evidence**, including the observed diff boundaries for transform edit/save/replace/delete/undo/redo
+8. **Lifecycle evidence** for real pane toggle, scene-wide playback, runtime detach, and viewer remount
+9. **Known issues/deviations**
+10. **Implementation commit ids and branch**; the final status-only commit may be identified as pending because its hash cannot be known before the report is committed
 
 ## Finalization sequence
 
-1. Implement the mission.
-2. Run all automated and manual verification.
-3. Re-check that **all acceptance criteria** are met.
-4. Update `AGENTS.md`.
-5. Stage the intended implementation/docs changes.
-6. Write `.codex-handoff/status.md` as the **last file modification**.
-7. Stage the status report, commit intentionally, and push the current branch.
-8. After pushing, perform **no more verification and no more modifications**. The pushed `status.md` must describe the exact final state.
+1. Implement all fixes and tests.
+2. Run automated verification.
+3. Perform the manual source-authoring experiment and restore its temporary edits.
+4. Re-run any checks affected by restoration.
+5. Re-check every acceptance criterion.
+6. Update `AGENTS.md`.
+7. Commit the implementation/tests/docs (except the status report) intentionally if desired.
+8. Write `.codex-handoff/status.md` as the **last file modification**.
+9. Commit the status report and push all commits to the current branch.
+10. After `status.md` is written, do not modify implementation/tests/docs. After pushing, perform no further verification or modification.
