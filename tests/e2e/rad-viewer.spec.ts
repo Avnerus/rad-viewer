@@ -159,4 +159,49 @@ test.describe('RAD Viewer', () => {
     expect(pitch).toBeNull()
     expect(zoom).toBeNull()
   })
+
+  test('selecting ScrollAnimator in Studio hierarchy shows keyframes in extension pane', async ({ page }) => {
+    await startViewer(page)
+
+    // Wait for Studio to be fully initialized
+    await page.waitForTimeout(1000)
+
+    // The Studio scene hierarchy tree renders object names as clickable items.
+    // Click on "Camera ScrollAnimator" in the hierarchy to select it.
+    const hierarchyItem = page.getByText('Camera ScrollAnimator')
+    await expect(hierarchyItem).toBeVisible({ timeout: 10_000 })
+    await hierarchyItem.click()
+    await page.waitForTimeout(500)
+
+    // Open the ScrollAnimator extension DropDownPane.
+    // The pane's tooltip contains a Pane with title "Scroll Animator".
+    // We find the tooltip that contains our extension content and make it visible.
+    await page.evaluate(() => {
+      // Find the DropDownPane tooltip that contains our extension
+      const tooltips = document.querySelectorAll('.tooltip')
+      for (const tooltip of tooltips) {
+        if (tooltip.querySelector('.sa-animator-name')) {
+          tooltip.style.display = 'block'
+          break
+        }
+      }
+    })
+    await page.waitForTimeout(200)
+
+    // After selecting the animator, the extension should show its name
+    const animatorName = page.locator('.sa-animator-name')
+    await expect(animatorName).toBeVisible({ timeout: 5000 })
+    await expect(animatorName).toContainText('Camera ScrollAnimator')
+
+    // The keyframe list should show the 2 default keyframes (0% and 100%)
+    const keyframeRows = page.locator('.sa-kf-row')
+    const rowCount = await keyframeRows.count()
+    expect(rowCount).toBe(2)
+
+    // First keyframe should be at 0%
+    await expect(keyframeRows.nth(0)).toContainText('0.00%')
+
+    // Second keyframe should be at 100%
+    await expect(keyframeRows.nth(1)).toContainText('100.00%')
+  })
 })
