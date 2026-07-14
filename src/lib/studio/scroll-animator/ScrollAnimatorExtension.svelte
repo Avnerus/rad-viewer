@@ -51,6 +51,7 @@
     keyframes: [] as ScrollKeyframe[],
     percentageDraft: '0',
     inputFocused: false,
+    committing: false,
   })
 
   // Reactive percentage from the shared runtime (via Svelte store subscription)
@@ -106,14 +107,19 @@
   }
 
   function handlePercentageCommit() {
+    if (uiState.committing) return // guard against Enter→blur double commit
+    uiState.committing = true
     const parsed = parseFloat(uiState.percentageDraft)
     if (isNaN(parsed)) {
       uiState.percentageDraft = currentPercentage.toFixed(2)
+      uiState.committing = false
       return
     }
     const clamped = clampPercentage(parsed)
     uiState.percentageDraft = clamped.toFixed(2)
     jumpToPercentage(clamped)
+    // Reset guard after a short delay so blur can fire without re-committing
+    setTimeout(() => { uiState.committing = false }, 50)
   }
 
   // Insert/save keyframe
@@ -192,34 +198,15 @@
     <DropDownPane title="Scroll Animator">
       {#if !uiState.animator}
         <div class="sa-no-selection">Select one ScrollAnimator</div>
-      {:else if !transactions.vitePluginEnabled}
-        <div class="sa-no-sync">
-          <div class="sa-animator-name">{uiState.animator.name || 'ScrollAnimator'}</div>
-          <div class="sa-warning">Studio source sync unavailable</div>
-          <div class="sa-percent-row">
-            <span class="sa-percent-display">{currentPercentage.toFixed(2)}%</span>
-          </div>
-          <div class="sa-keyframes">
-            {#each uiState.keyframes as kf}
-              <div class="sa-kf-row">
-                <button
-                  class="sa-kf-pct"
-                  type="button"
-                  onclick={() => handleJumpToKeyframe(kf.scroll)}
-                  title="Jump to {kf.scroll.toFixed(2)}%"
-                >
-                  {kf.scroll.toFixed(2)}%
-                </button>
-                <span class="sa-kf-pos">[{kf.position.map((v) => v.toFixed(2)).join(', ')}]</span>
-              </div>
-            {/each}
-          </div>
-        </div>
       {:else}
         <div class="sa-panel">
           <div class="sa-animator-name">{uiState.animator.name || 'ScrollAnimator'}</div>
 
-          <!-- Current percentage -->
+          {#if !transactions.vitePluginEnabled}
+            <div class="sa-warning">Studio source sync unavailable — persistence controls disabled</div>
+          {/if}
+
+          <!-- Percentage input — always available for navigation -->
           <div class="sa-percent-row">
             <label class="sa-label" for="sa-percent-input">Percentage:</label>
             <input
@@ -260,23 +247,27 @@
                   {kf.scroll.toFixed(2)}%
                 </button>
                 <span class="sa-kf-pos">[{kf.position.map((v) => v.toFixed(2)).join(', ')}]</span>
-                <button
-                  class="sa-kf-delete"
-                  type="button"
-                  onclick={() => handleDeleteKeyframe(kf.scroll)}
-                  title="Delete keyframe"
-                  aria-label="Delete keyframe at {kf.scroll.toFixed(2)}%"
-                >
-                  ✕
-                </button>
+                {#if transactions.vitePluginEnabled}
+                  <button
+                    class="sa-kf-delete"
+                    type="button"
+                    onclick={() => handleDeleteKeyframe(kf.scroll)}
+                    title="Delete keyframe"
+                    aria-label="Delete keyframe at {kf.scroll.toFixed(2)}%"
+                  >
+                    ✕
+                  </button>
+                {/if}
               </div>
             {/each}
           </div>
 
-          <!-- Insert keyframe button -->
-          <button class="sa-insert-btn" type="button" onclick={handleInsertKeyframe}>
-            Insert/save scroll keyframe
-          </button>
+          <!-- Insert keyframe button — only when source sync available -->
+          {#if transactions.vitePluginEnabled}
+            <button class="sa-insert-btn" type="button" onclick={handleInsertKeyframe}>
+              Insert/save scroll keyframe
+            </button>
+          {/if}
         </div>
       {/if}
     </DropDownPane>
@@ -304,13 +295,6 @@
     font-size: 12px;
     color: #ccc;
     margin-bottom: 2px;
-  }
-
-  .sa-no-sync {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    padding: 4px;
   }
 
   .sa-warning {

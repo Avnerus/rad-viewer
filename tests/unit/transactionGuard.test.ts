@@ -62,7 +62,7 @@ describe('guardScrollAnimatorTransactions', () => {
     expect(txs[0].sync).toBeUndefined()
   })
 
-  it('allows sync for keyframes on ScrollAnimator', () => {
+  it('allows sync for root keyframes on ScrollAnimator', () => {
     const animator = new ScrollAnimator()
     const txs: GuardTransaction[] = [makeTransaction(animator, 'keyframes')]
     guardScrollAnimatorTransactions(txs)
@@ -70,11 +70,25 @@ describe('guardScrollAnimatorTransactions', () => {
     expect(txs[0].sync!.attributeName).toBe('keyframes')
   })
 
-  it('allows sync for keyframes.xxx path on ScrollAnimator', () => {
+  it('allows sync for path-prefixed keyframes (e.g. scene.camera.keyframes)', () => {
+    const animator = new ScrollAnimator()
+    const txs: GuardTransaction[] = [makeTransaction(animator, 'scene.camera.keyframes')]
+    guardScrollAnimatorTransactions(txs)
+    expect(txs[0].sync).toBeDefined()
+  })
+
+  it('blocks descendant attribute keyframes.0', () => {
     const animator = new ScrollAnimator()
     const txs: GuardTransaction[] = [makeTransaction(animator, 'keyframes.0')]
     guardScrollAnimatorTransactions(txs)
-    expect(txs[0].sync).toBeDefined()
+    expect(txs[0].sync).toBeUndefined()
+  })
+
+  it('blocks descendant attribute scene.keyframes.position', () => {
+    const animator = new ScrollAnimator()
+    const txs: GuardTransaction[] = [makeTransaction(animator, 'scene.keyframes.position')]
+    guardScrollAnimatorTransactions(txs)
+    expect(txs[0].sync).toBeUndefined()
   })
 
   it('leaves non-ScrollAnimator transactions untouched', () => {

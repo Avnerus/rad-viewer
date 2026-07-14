@@ -55,13 +55,13 @@ The `scrollAnimatorRuntime` singleton bridges the scene and extension:
 
 ## Studio Extension UI
 
-Registered via `<Studio extensions={[ScrollAnimatorExtension]}>`. Uses public `useObjectSelection` and `useTransactions` from `@threlte/studio/extensions`. Shows a `DropDownPane` (default toggle behavior, no custom override) with:
+Registered via `<Studio extensions={[ScrollAnimatorExtension]}>`. Uses public `useObjectSelection` and `useTransactions` from `@threlte/studio/extensions`. Shows a `DropDownPane` (default toggle behavior) with:
 1. Live ScrollTrigger percentage from the shared runtime bridge.
-2. Numeric percentage input (0..100) — draft string not overwritten while focused; commits on Enter/blur.
-3. Sorted keyframe list with clickable jump and delete buttons.
-4. "Insert/save scroll keyframe" button — captures local position + Euler rotation at current percentage.
+2. Numeric percentage input (0..100) — available in all modes; draft string not overwritten while focused; commits on Enter/blur with double-commit guard.
+3. Sorted keyframe list with clickable jump buttons (always) and delete buttons (source-sync only).
+4. "Insert/save scroll keyframe" button (source-sync only) — captures local position + Euler rotation at current percentage.
 
-Active only for exactly one selected `ScrollAnimator`; otherwise shows "Select one ScrollAnimator". Source-sync controls are disabled with a clear message when `vitePluginEnabled` is false.
+Active only for exactly one selected `ScrollAnimator`; otherwise shows "Select one ScrollAnimator". When source sync is unavailable, a warning is shown but percentage navigation and keyframe jumps remain functional.
 
 ## Source-Sync Guard Invariant
 

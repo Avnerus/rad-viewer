@@ -33,10 +33,12 @@ export function isScrollAnimator(obj: unknown): boolean {
 
 /**
  * Check whether a transaction's attribute name targets `keyframes`.
- * Handles both root attribute ('keyframes') and path-prefixed ('keyframes.xxx').
+ * Studio builds nested attribute names as `[...pathItems, propertyPath].join('.')`,
+ * so a path-prefixed keyframe attribute is `some.path.keyframes`.
+ * Only allow the final path segment to be exactly `keyframes`.
  */
 function isKeyframesAttribute(attributeName: string): boolean {
-  return attributeName === 'keyframes' || attributeName.startsWith('keyframes.')
+  return attributeName === 'keyframes' || attributeName.endsWith('.keyframes')
 }
 
 /**

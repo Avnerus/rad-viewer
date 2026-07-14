@@ -89,11 +89,12 @@
     targetWorldZ = _targetWorld.z
   }
 
-  // Threlte task: update camera look-at target every frame
+  // Threlte task: update camera look-at and debug state every frame
   // Uses public useTask; autoInvalidate false because we rely on the render loop
-  useTask((_delta) => {
+  useTask(() => {
     cameraTarget.getWorldPosition(_targetWorld)
     camera.lookAt(_targetWorld)
+    updateDebugState()
   }, { autoInvalidate: false })
 
   onMount(() => {
