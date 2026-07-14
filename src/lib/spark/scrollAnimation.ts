@@ -54,18 +54,30 @@ export function clampPercentage(value: number): number {
 /**
  * Deep-copy and canonicalize a keyframe array:
  * - Clone every entry
- * - Clamp each percentage
+ * - Clamp and round each percentage
  * - Sort ascending by percentage
+ * - Deduplicate: when multiple entries normalize to the same percentage,
+ *   the last one wins (deterministic last-write-wins).
  * @returns A new canonical array (never aliases the input).
  */
 export function canonicalizeKeyframes(raw: ScrollKeyframe[]): ScrollKeyframe[] {
-  return raw
-    .map((kf) => ({
-      scroll: clampPercentage(kf.scroll),
-      position: [...kf.position] as Vec3Tuple,
-      rotation: [...kf.rotation] as Vec3Tuple,
-    }))
-    .sort((a, b) => a.scroll - b.scroll)
+  const clamped = raw.map((kf) => ({
+    scroll: clampPercentage(kf.scroll),
+    position: [...kf.position] as Vec3Tuple,
+    rotation: [...kf.rotation] as Vec3Tuple,
+  }))
+  clamped.sort((a, b) => a.scroll - b.scroll)
+
+  // Deduplicate: last-write-wins for equal percentages
+  const deduped: ScrollKeyframe[] = []
+  for (const kf of clamped) {
+    if (deduped.length > 0 && deduped[deduped.length - 1].scroll === kf.scroll) {
+      deduped[deduped.length - 1] = kf
+    } else {
+      deduped.push(kf)
+    }
+  }
+  return deduped
 }
 
 /* ------------------------------------------------------------------ */

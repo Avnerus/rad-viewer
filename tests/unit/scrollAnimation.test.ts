@@ -79,6 +79,52 @@ describe('canonicalizeKeyframes', () => {
   it('handles empty array', () => {
     expect(canonicalizeKeyframes([])).toEqual([])
   })
+
+  it('deduplicates exact duplicate percentages (last-write-wins)', () => {
+    const input: ScrollKeyframe[] = [
+      { scroll: 50, position: [1, 0, 0], rotation: [0, 0, 0] },
+      { scroll: 50, position: [2, 0, 0], rotation: [0, 0, 0] },
+    ]
+    const result = canonicalizeKeyframes(input)
+    expect(result).toHaveLength(1)
+    expect(result[0].position[0]).toBe(2) // last write wins
+  })
+
+  it('deduplicates rounding collisions', () => {
+    const input: ScrollKeyframe[] = [
+      { scroll: 50.001, position: [1, 0, 0], rotation: [0, 0, 0] },
+      { scroll: 50.004, position: [2, 0, 0], rotation: [0, 0, 0] },
+    ]
+    // Both round to 50.00
+    const result = canonicalizeKeyframes(input)
+    expect(result).toHaveLength(1)
+    expect(result[0].scroll).toBe(50)
+    expect(result[0].position[0]).toBe(2) // last write wins
+  })
+
+  it('deduplicates clamp collisions at 0', () => {
+    const input: ScrollKeyframe[] = [
+      { scroll: -5, position: [1, 0, 0], rotation: [0, 0, 0] },
+      { scroll: -2, position: [2, 0, 0], rotation: [0, 0, 0] },
+    ]
+    // Both clamp to 0
+    const result = canonicalizeKeyframes(input)
+    expect(result).toHaveLength(1)
+    expect(result[0].scroll).toBe(0)
+    expect(result[0].position[0]).toBe(2) // last write wins
+  })
+
+  it('deduplicates clamp collisions at 100', () => {
+    const input: ScrollKeyframe[] = [
+      { scroll: 102, position: [1, 0, 0], rotation: [0, 0, 0] },
+      { scroll: 105, position: [2, 0, 0], rotation: [0, 0, 0] },
+    ]
+    // Both clamp to 100
+    const result = canonicalizeKeyframes(input)
+    expect(result).toHaveLength(1)
+    expect(result[0].scroll).toBe(100)
+    expect(result[0].position[0]).toBe(2) // last write wins
+  })
 })
 
 describe('upsertKeyframe', () => {

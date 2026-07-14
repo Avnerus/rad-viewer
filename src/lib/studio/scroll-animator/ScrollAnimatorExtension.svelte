@@ -1,21 +1,23 @@
 <script lang="ts">
   import { onMount, onDestroy, type Snippet } from 'svelte'
   import { useStudio, ToolbarItem, DropDownPane } from '@threlte/studio/extend'
-  // Internal Studio modules — types provided by studio-types.d.ts
-  import { useObjectSelection } from '@threlte/studio/extensions/object-selection/useObjectSelection.svelte'
-  import { useTransactions } from '@threlte/studio/extensions/transactions/useTransactions'
-  import { vitePluginEnabled } from '@threlte/studio/extensions/transactions/vitePluginEnabled'
-  import { getThrelteStudioUserData } from '@threlte/studio/internal/getThrelteStudioUserData'
+  import { useObjectSelection, useTransactions } from '@threlte/studio/extensions'
   import type { Object3D } from 'three'
-  import { ScrollAnimator } from '$lib/spark/ScrollAnimator'
   import type { ScrollKeyframe } from '$lib/spark/scrollAnimation'
+
+  /** Structural type for accessing ScrollAnimator properties via brand. */
+  interface ScrollAnimatorLike extends Object3D {
+    keyframes: ScrollKeyframe[]
+  }
+
   import {
     clampPercentage,
     upsertKeyframe,
     deleteKeyframe,
     canonicalizeKeyframes,
   } from '$lib/spark/scrollAnimation'
-  import { guardScrollAnimatorTransactions, isScrollAnimator } from './transactionGuard'
+  import { guardScrollAnimatorTransactions, isScrollAnimator, type GuardTransaction } from './transactionGuard'
+  import { scrollAnimatorRuntime } from './scrollAnimatorRuntime'
 
   let { children }: { children?: Snippet } = $props()
 
@@ -24,11 +26,10 @@
   const transactions = useTransactions()
 
   // Extension state
-  const extension = createExtension({
+  createExtension({
     scope: 'scroll-animator',
     state: ({ persist }) => ({
-      currentPercentage: persist<number>(0),
-      paneVisible: persist<boolean>(true),
+      paneVisible: persist<boolean>(false),
     }),
     actions: {},
   })
@@ -36,7 +37,7 @@
   // Transaction guard: suppress source sync for ScrollAnimator transforms
   let unsubscribeGuard: (() => void) | undefined
 
-  // Reactive derived values
+  // Reactive derived values from selection
   const selectedObjects = $derived(objectSelection.selectedObjects ?? [])
   const singleAnimator = $derived<Object3D | null>(
     selectedObjects.length === 1 && isScrollAnimator(selectedObjects[0])
@@ -44,111 +45,84 @@
       : null,
   )
 
-  // Mutable state held in a plain object to allow $effect reassignment
+  // Mutable UI state
   let uiState = $state({
     animator: null as Object3D | null,
     keyframes: [] as ScrollKeyframe[],
-    percentageInput: '0',
+    percentageDraft: '0',
+    inputFocused: false,
+  })
+
+  // Reactive percentage from the shared runtime (via Svelte store subscription)
+  let currentPercentage = $state(0)
+  const unsubPercentage = scrollAnimatorRuntime.percentage.subscribe((value) => {
+    currentPercentage = value
+    // Only sync the draft when the input is not focused
+    if (!uiState.inputFocused) {
+      uiState.percentageDraft = value.toFixed(2)
+    }
   })
 
   // Keep animator/keyframes in sync with selection
+  // Also refresh after any transaction (commit/undo/redo)
+  let revision = $state(0)
   $effect(() => {
     const sa = singleAnimator
+    const rev = revision // re-run on transaction revision bump
+    void rev
     uiState.animator = sa
-    if (sa && sa instanceof ScrollAnimator) {
-      uiState.keyframes = [...sa.keyframes]
+    if (sa && isScrollAnimator(sa)) {
+      // Read keyframes via the getter (always returns a deep copy)
+      uiState.keyframes = (sa as unknown as ScrollAnimatorLike).keyframes ?? []
     } else {
       uiState.keyframes = []
     }
   })
 
-  // Read the current scroll percentage from the document
-  function readCurrentPercentage(): number {
-    if (typeof window === 'undefined') return 0
-    const spacer = document.querySelector<HTMLElement>('.scroll-spacer')
-    if (!spacer) return 0
-
-    const spacerTop = spacer.getBoundingClientRect().top + window.scrollY
-    const spacerHeight = spacer.scrollHeight
-    const scrollY = window.scrollY
-    const progress = Math.max(0, Math.min(1, (scrollY - spacerTop) / (spacerHeight - window.innerHeight)))
-    return clampPercentage(progress * 100)
-  }
-
-  // Sync percentage display periodically
-  let syncInterval: number | null = null
-
   onMount(() => {
-    // Guard transactions
-    unsubscribeGuard = transactions.onTransaction((txs: unknown[]) => {
-      guardScrollAnimatorTransactions(txs as Parameters<typeof guardScrollAnimatorTransactions>[0])
+    // Guard transactions: suppress source sync for ScrollAnimator transforms
+    // Also bump revision so the $effect refreshes the keyframe list
+    unsubscribeGuard = transactions.onTransaction((txs) => {
+      guardScrollAnimatorTransactions(txs as GuardTransaction[])
+      // Bump revision to trigger keyframe list refresh
+      revision += 1
     })
-
-    // Periodically sync the percentage display
-    syncInterval = window.setInterval(() => {
-      const pct = readCurrentPercentage()
-      extension.state.currentPercentage = pct
-      uiState.percentageInput = pct.toFixed(2)
-    }, 100)
   })
 
   onDestroy(() => {
     unsubscribeGuard?.()
-    if (syncInterval !== null) {
-      window.clearInterval(syncInterval)
-      syncInterval = null
-    }
+    unsubPercentage()
   })
 
-  // Get the source metadata for a ScrollAnimator
-  function getSourceMetadata(obj: Object3D) {
-    const meta = getThrelteStudioUserData(obj)
-    if (!meta) return null
-    return {
-      moduleId: meta.moduleId,
-      componentIndex: meta.index,
-    }
-  }
-
-  // Jump to a percentage
+  // Jump to a percentage via the shared runtime bridge
   function jumpToPercentage(percent: number): void {
-    const clamped = clampPercentage(percent)
-    const spacer = document.querySelector<HTMLElement>('.scroll-spacer')
-    if (!spacer) return
-
-    const spacerTop = spacer.getBoundingClientRect().top + window.scrollY
-    const spacerHeight = spacer.scrollHeight
-    const viewHeight = window.innerHeight
-    const range = spacerHeight - viewHeight
-    const targetScroll = spacerTop + (clamped / 100) * range
-    window.scrollTo(0, targetScroll)
+    scrollAnimatorRuntime.jumpToPercentage(clampPercentage(percent))
   }
 
   // Handle percentage input
   function handlePercentageInput(e: Event) {
     const val = (e.target as HTMLInputElement).value
-    uiState.percentageInput = val
+    uiState.percentageDraft = val
   }
 
   function handlePercentageCommit() {
-    const parsed = parseFloat(uiState.percentageInput)
+    const parsed = parseFloat(uiState.percentageDraft)
     if (isNaN(parsed)) {
-      uiState.percentageInput = extension.state.currentPercentage.toFixed(2)
+      uiState.percentageDraft = currentPercentage.toFixed(2)
       return
     }
     const clamped = clampPercentage(parsed)
-    uiState.percentageInput = clamped.toFixed(2)
+    uiState.percentageDraft = clamped.toFixed(2)
     jumpToPercentage(clamped)
   }
 
   // Insert/save keyframe
   function handleInsertKeyframe(): void {
     const animator = uiState.animator
-    if (!animator || !(animator instanceof ScrollAnimator)) return
-    if (!vitePluginEnabled) return
+    if (!animator || !isScrollAnimator(animator)) return
+    if (!transactions.vitePluginEnabled) return
 
-    const currentPct = extension.state.currentPercentage
-    const normalized = clampPercentage(currentPct)
+    const normalized = clampPercentage(currentPercentage)
 
     // Read local position and Euler rotation from the animator
     const pos = [
@@ -164,13 +138,11 @@
       Math.round(euler[2] * 10000) / 10000,
     ] as [number, number, number]
 
-    const newKeyframes = upsertKeyframe(animator.keyframes, normalized, pos, rot)
+    const currentKfs = (animator as unknown as ScrollAnimatorLike).keyframes ?? []
+    const newKeyframes = upsertKeyframe(currentKfs, normalized, pos, rot)
 
     // Commit as a transaction with source sync
-    const meta = getSourceMetadata(animator)
-    if (!meta) return
-
-    const historicKeyframes = canonicalizeKeyframes(animator.keyframes)
+    const historicKeyframes = canonicalizeKeyframes(currentKfs)
 
     const tx = transactions.buildTransaction({
       object: animator,
@@ -181,33 +153,20 @@
       sync: true,
     })
 
-    // Override sync metadata to target the correct source location
-    tx.sync = {
-      attributeName: 'keyframes',
-      componentIndex: meta.componentIndex,
-      moduleId: meta.moduleId,
-      precision: 4,
-    }
-
     transactions.commit([tx])
-
-    // Update local state immediately
-    animator.keyframes = newKeyframes
-    uiState.keyframes = [...newKeyframes]
+    // The onTransaction callback will bump revision and refresh the list
   }
 
   // Delete keyframe
   function handleDeleteKeyframe(scroll: number): void {
     const animator = uiState.animator
-    if (!animator || !(animator instanceof ScrollAnimator)) return
-    if (!vitePluginEnabled) return
+    if (!animator || !isScrollAnimator(animator)) return
+    if (!transactions.vitePluginEnabled) return
 
-    const newKeyframes = deleteKeyframe(animator.keyframes, scroll)
+    const currentKfs = (animator as unknown as ScrollAnimatorLike).keyframes ?? []
+    const newKeyframes = deleteKeyframe(currentKfs, scroll)
 
-    const meta = getSourceMetadata(animator)
-    if (!meta) return
-
-    const historicKeyframes = canonicalizeKeyframes(animator.keyframes)
+    const historicKeyframes = canonicalizeKeyframes(currentKfs)
 
     const tx = transactions.buildTransaction({
       object: animator,
@@ -218,18 +177,8 @@
       sync: true,
     })
 
-    tx.sync = {
-      attributeName: 'keyframes',
-      componentIndex: meta.componentIndex,
-      moduleId: meta.moduleId,
-      precision: 4,
-    }
-
     transactions.commit([tx])
-
-    // Update local state immediately
-    animator.keyframes = newKeyframes
-    uiState.keyframes = [...newKeyframes]
+    // The onTransaction callback will bump revision and refresh the list
   }
 
   // Jump to keyframe percentage
@@ -239,89 +188,99 @@
 </script>
 
 <ToolbarItem position="left">
-  <DropDownPane
-    title="Scroll Animator"
-    visible={extension.state.paneVisible}
-    toggle={() => {
-      extension.state.paneVisible = !extension.state.paneVisible
-    }}
-  >
-    {#if !uiState.animator}
-      <div class="sa-no-selection">Select one ScrollAnimator</div>
-    {:else if !vitePluginEnabled}
-      <div class="sa-no-sync">
-        <div class="sa-animator-name">{uiState.animator.name || 'ScrollAnimator'}</div>
-        <div class="sa-warning">Studio source sync unavailable</div>
-        <div class="sa-keyframes">
-          {#each uiState.keyframes as kf}
-            <div class="sa-kf-row">
-              <button
-                class="sa-kf-pct"
-                type="button"
-                onclick={() => handleJumpToKeyframe(kf.scroll)}
-              >
-                {kf.scroll.toFixed(2)}%
-              </button>
-              <span class="sa-kf-pos">[{kf.position.map((v) => v.toFixed(2)).join(', ')}]</span>
-            </div>
-          {/each}
+  <div class="scroll-animator-extension">
+    <DropDownPane title="Scroll Animator">
+      {#if !uiState.animator}
+        <div class="sa-no-selection">Select one ScrollAnimator</div>
+      {:else if !transactions.vitePluginEnabled}
+        <div class="sa-no-sync">
+          <div class="sa-animator-name">{uiState.animator.name || 'ScrollAnimator'}</div>
+          <div class="sa-warning">Studio source sync unavailable</div>
+          <div class="sa-percent-row">
+            <span class="sa-percent-display">{currentPercentage.toFixed(2)}%</span>
+          </div>
+          <div class="sa-keyframes">
+            {#each uiState.keyframes as kf}
+              <div class="sa-kf-row">
+                <button
+                  class="sa-kf-pct"
+                  type="button"
+                  onclick={() => handleJumpToKeyframe(kf.scroll)}
+                  title="Jump to {kf.scroll.toFixed(2)}%"
+                >
+                  {kf.scroll.toFixed(2)}%
+                </button>
+                <span class="sa-kf-pos">[{kf.position.map((v) => v.toFixed(2)).join(', ')}]</span>
+              </div>
+            {/each}
+          </div>
         </div>
-      </div>
-    {:else}
-      <div class="sa-panel">
-        <div class="sa-animator-name">{uiState.animator.name || 'ScrollAnimator'}</div>
+      {:else}
+        <div class="sa-panel">
+          <div class="sa-animator-name">{uiState.animator.name || 'ScrollAnimator'}</div>
 
-        <!-- Current percentage -->
-        <div class="sa-percent-row">
-          <label class="sa-label" for="sa-percent-input">Percentage:</label>
-          <input
-            id="sa-percent-input"
-            type="number"
-            class="sa-percent-input"
-            min="0"
-            max="100"
-            step="0.01"
-            value={uiState.percentageInput}
-            oninput={handlePercentageInput}
-            onkeydown={(e) => {
-              if (e.key === 'Enter') handlePercentageCommit()
-            }}
-            onblur={handlePercentageCommit}
-          />
-          <span class="sa-percent-display">{extension.state.currentPercentage.toFixed(2)}%</span>
+          <!-- Current percentage -->
+          <div class="sa-percent-row">
+            <label class="sa-label" for="sa-percent-input">Percentage:</label>
+            <input
+              id="sa-percent-input"
+              type="number"
+              class="sa-percent-input"
+              min="0"
+              max="100"
+              step="0.01"
+              value={uiState.percentageDraft}
+              onfocus={() => { uiState.inputFocused = true }}
+              onblur={() => {
+                uiState.inputFocused = false
+                handlePercentageCommit()
+              }}
+              oninput={handlePercentageInput}
+              onkeydown={(e: KeyboardEvent) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  handlePercentageCommit()
+                  ;(e.target as HTMLInputElement).blur()
+                }
+              }}
+            />
+            <span class="sa-percent-display">{currentPercentage.toFixed(2)}%</span>
+          </div>
+
+          <!-- Keyframe list -->
+          <div class="sa-keyframes">
+            {#each uiState.keyframes as kf}
+              <div class="sa-kf-row">
+                <button
+                  class="sa-kf-pct"
+                  type="button"
+                  onclick={() => handleJumpToKeyframe(kf.scroll)}
+                  title="Jump to {kf.scroll.toFixed(2)}%"
+                >
+                  {kf.scroll.toFixed(2)}%
+                </button>
+                <span class="sa-kf-pos">[{kf.position.map((v) => v.toFixed(2)).join(', ')}]</span>
+                <button
+                  class="sa-kf-delete"
+                  type="button"
+                  onclick={() => handleDeleteKeyframe(kf.scroll)}
+                  title="Delete keyframe"
+                  aria-label="Delete keyframe at {kf.scroll.toFixed(2)}%"
+                >
+                  ✕
+                </button>
+              </div>
+            {/each}
+          </div>
+
+          <!-- Insert keyframe button -->
+          <button class="sa-insert-btn" type="button" onclick={handleInsertKeyframe}>
+            Insert/save scroll keyframe
+          </button>
         </div>
-
-        <!-- Keyframe list -->
-        <div class="sa-keyframes">
-          {#each uiState.keyframes as kf}
-            <div class="sa-kf-row">
-              <button
-                class="sa-kf-pct"
-                onclick={() => handleJumpToKeyframe(kf.scroll)}
-                title="Jump to {kf.scroll.toFixed(2)}%"
-              >
-                {kf.scroll.toFixed(2)}%
-              </button>
-              <span class="sa-kf-pos">[{kf.position.map((v) => v.toFixed(2)).join(', ')}]</span>
-              <button
-                class="sa-kf-delete"
-                onclick={() => handleDeleteKeyframe(kf.scroll)}
-                title="Delete keyframe"
-                aria-label="Delete keyframe at {kf.scroll.toFixed(2)}%"
-              >
-                ✕
-              </button>
-            </div>
-          {/each}
-        </div>
-
-        <!-- Insert keyframe button -->
-        <button class="sa-insert-btn" onclick={handleInsertKeyframe}>
-          Insert/save scroll keyframe
-        </button>
-      </div>
-    {/if}
-  </DropDownPane>
+      {/if}
+    </DropDownPane>
+  </div>
 </ToolbarItem>
 
 {@render children?.()}

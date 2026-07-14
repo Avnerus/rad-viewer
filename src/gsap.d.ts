@@ -15,8 +15,6 @@ declare module 'gsap/ScrollTrigger' {
       scrub?: boolean | number
       onUpdate?: (self: ScrollTriggerInstance) => void
     }): ScrollTriggerInstance
-    maxScroll(window: Window): { y: number }
-    refresh(): void
   }
 }
 

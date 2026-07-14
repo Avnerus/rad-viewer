@@ -6,13 +6,37 @@
  * enqueued. We clear `transaction.sync` for any non-keyframe attribute on a
  * branded ScrollAnimator.
  */
-import type { Transaction } from '@threlte/studio/extensions/transactions/TransactionQueue/TransactionQueue.svelte'
 
 /**
- * Check if an object is a branded ScrollAnimator.
+ * Narrow structural transaction type for the guard.
+ * Avoids importing the private Transaction type from Studio internals.
+ */
+export interface GuardTransaction {
+  object: unknown
+  sync?: {
+    attributeName: string
+  } | null
+}
+
+/**
+ * Check if an object is a branded ScrollAnimator (HMR-safe structural check).
  */
 export function isScrollAnimator(obj: unknown): boolean {
-  return obj !== null && typeof obj === 'object' && (obj as Record<string, unknown>).isScrollAnimator === true
+  return (
+    obj !== null &&
+    typeof obj === 'object' &&
+    'isScrollAnimator' in obj &&
+    (obj as Record<string, unknown>).isScrollAnimator === true &&
+    typeof (obj as Record<string, unknown>).applyScrollPercentage === 'function'
+  )
+}
+
+/**
+ * Check whether a transaction's attribute name targets `keyframes`.
+ * Handles both root attribute ('keyframes') and path-prefixed ('keyframes.xxx').
+ */
+function isKeyframesAttribute(attributeName: string): boolean {
+  return attributeName === 'keyframes' || attributeName.startsWith('keyframes.')
 }
 
 /**
@@ -22,14 +46,14 @@ export function isScrollAnimator(obj: unknown): boolean {
  * Mutates the transaction array in place (called from onTransaction callbacks).
  */
 export function guardScrollAnimatorTransactions(
-  transactions: Transaction<any, any>[],
+  transactions: GuardTransaction[],
 ): void {
   for (const tx of transactions) {
     if (!isScrollAnimator(tx.object)) continue
     const sync = tx.sync
     if (!sync) continue
     // Only allow source sync for `keyframes` attribute
-    if (sync.attributeName !== 'keyframes') {
+    if (!isKeyframesAttribute(sync.attributeName)) {
       tx.sync = undefined
     }
   }

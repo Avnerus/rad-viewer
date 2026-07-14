@@ -1,11 +1,13 @@
 <script lang="ts">
-  import { T, useThrelte, useCamera } from '@threlte/core'
+  import { T, useThrelte, useCamera, useTask } from '@threlte/core'
   import { onMount, onDestroy } from 'svelte'
   import { PerspectiveCamera, Object3D, Vector3 } from 'three'
   import { ScrollTrigger } from 'gsap/ScrollTrigger'
   import { gsap } from 'gsap'
   import { ScrollAnimator } from '$lib/spark/ScrollAnimator'
   import type { ScrollKeyframe } from '$lib/spark/scrollAnimation'
+  import { isScrollAnimator } from '$lib/studio/scroll-animator/transactionGuard'
+  import { scrollAnimatorRuntime } from '$lib/studio/scroll-animator/scrollAnimatorRuntime'
   import type { DeviceProfile } from '$lib/types'
   import SparkSplats from './SparkSplats.svelte'
   import SparkStudioBridge from './SparkStudioBridge.svelte'
@@ -58,34 +60,41 @@
   cameraAnimator.applyScrollPercentage(0)
   targetAnimator.applyScrollPercentage(0)
 
-  // ScrollTrigger update handler
-  function applyScrollAnimators(percent: number): void {
-    cameraAnimator.applyScrollPercentage(percent)
-    targetAnimator.applyScrollPercentage(percent)
+  // Scene-wide animator playback: traverse scene and apply to every branded ScrollAnimator
+  function applyScrollToAllAnimators(percent: number): void {
+    const scene = threlte.scene
+    if (!scene) return
+    scene.traverse((object: Object3D) => {
+      if (isScrollAnimator(object)) {
+        (object as unknown as { applyScrollPercentage: (p: number) => void }).applyScrollPercentage(percent)
+      }
+    })
     cameraProgress = percent
     updateDebugState()
   }
 
-  // Update camera look-at target and debug state
-  function updateCameraLookAt(): void {
-    const targetWorld = new Vector3()
-    cameraTarget.getWorldPosition(targetWorld)
-    camera.lookAt(targetWorld)
-  }
+  // Reusable scratch vectors for look-at and debug (avoid per-frame allocation)
+  const _targetWorld = new Vector3()
+  const _camWorld = new Vector3()
 
   function updateDebugState(): void {
-    const camWorld = new Vector3()
-    camera.getWorldPosition(camWorld)
-    cameraWorldX = camWorld.x
-    cameraWorldY = camWorld.y
-    cameraWorldZ = camWorld.z
+    camera.getWorldPosition(_camWorld)
+    cameraWorldX = _camWorld.x
+    cameraWorldY = _camWorld.y
+    cameraWorldZ = _camWorld.z
 
-    const targetWorld = new Vector3()
-    cameraTarget.getWorldPosition(targetWorld)
-    targetWorldX = targetWorld.x
-    targetWorldY = targetWorld.y
-    targetWorldZ = targetWorld.z
+    cameraTarget.getWorldPosition(_targetWorld)
+    targetWorldX = _targetWorld.x
+    targetWorldY = _targetWorld.y
+    targetWorldZ = _targetWorld.z
   }
+
+  // Threlte task: update camera look-at target every frame
+  // Uses public useTask; autoInvalidate false because we rely on the render loop
+  useTask((_delta) => {
+    cameraTarget.getWorldPosition(_targetWorld)
+    camera.lookAt(_targetWorld)
+  }, { autoInvalidate: false })
 
   onMount(() => {
     if (typeof window === 'undefined') return
@@ -108,25 +117,16 @@
       scrub: true,
       onUpdate: (self) => {
         const percent = self.progress * 100
-        applyScrollAnimators(percent)
+        scrollAnimatorRuntime.updateProgress(self.progress)
+        applyScrollToAllAnimators(percent)
       },
     })
 
-    // Apply initial pose from the current ScrollTrigger progress
-    if (scrollTrigger) {
-      applyScrollAnimators(scrollTrigger.progress * 100)
-    }
+    // Attach the trigger to the shared runtime bridge
+    scrollAnimatorRuntime.attach(scrollTrigger)
 
-    // Render task: update camera look-at target every frame
-    // We wrap the WebGLRenderer.render to inject look-at before each frame
-    const { renderer } = threlte
-    if (renderer) {
-      const originalRender = renderer.render.bind(renderer)
-      renderer.render = function (scene: Parameters<typeof originalRender>[0], cam: Parameters<typeof originalRender>[1]) {
-        updateCameraLookAt()
-        return originalRender(scene, cam)
-      }
-    }
+    // Apply initial pose from the current ScrollTrigger progress
+    applyScrollToAllAnimators(scrollTrigger.progress * 100)
 
     // Mark as loaded
     loaded = true
@@ -135,6 +135,7 @@
 
   onDestroy(() => {
     if (scrollTrigger) {
+      scrollAnimatorRuntime.detach(scrollTrigger)
       scrollTrigger.kill()
       scrollTrigger = null
     }

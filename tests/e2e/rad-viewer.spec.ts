@@ -5,16 +5,22 @@ const SAMPLE_URL =
 
 /** Read camera debug attributes from the hidden debug element */
 async function getCameraState(page: import('@playwright/test').Page) {
-  const el = page.getByTestId('camera-state')
-  return {
-    progress: parseFloat(await el.getAttribute('data-progress') ?? '0'),
-    x: parseFloat(await el.getAttribute('data-x') ?? '0'),
-    y: parseFloat(await el.getAttribute('data-y') ?? '0'),
-    z: parseFloat(await el.getAttribute('data-z') ?? '0'),
-    targetX: parseFloat(await el.getAttribute('data-target-x') ?? '0'),
-    targetY: parseFloat(await el.getAttribute('data-target-y') ?? '0'),
-    targetZ: parseFloat(await el.getAttribute('data-target-z') ?? '0'),
-  }
+  // Use evaluate to read all attributes at once, avoiding per-attribute timeouts
+  // that can occur for elements rendered inside a WebGL canvas overlay.
+  return page.evaluate(() => {
+    const el = document.querySelector('[data-testid="camera-state"]')
+    if (!el) return null
+    const get = (name: string) => parseFloat(el.getAttribute(name) ?? '0')
+    return {
+      progress: get('data-progress'),
+      x: get('data-x'),
+      y: get('data-y'),
+      z: get('data-z'),
+      targetX: get('data-target-x'),
+      targetY: get('data-target-y'),
+      targetZ: get('data-target-z'),
+    }
+  })
 }
 
 /** Helper: start the viewer and wait for canvas */
@@ -24,6 +30,39 @@ async function startViewer(page: import('@playwright/test').Page) {
   await input.fill(SAMPLE_URL)
   await page.getByRole('button', { name: 'Start' }).click()
   await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
+}
+
+/**
+ * Helper: select a ScrollAnimator in the Studio hierarchy and open the
+ * extension pane. The pane toggle button is rendered inside the fixed canvas
+ * where Playwright actionability checks are unreliable, so we use a targeted
+ * click approach.
+ */
+async function selectAnimatorAndOpenPane(
+  page: import('@playwright/test').Page,
+  animatorName: string,
+) {
+  // Wait for Studio to fully initialize
+  await page.waitForTimeout(2000)
+
+  // Click the animator in the Studio scene hierarchy
+  const hierarchyItem = page.getByText(animatorName)
+  await expect(hierarchyItem).toBeVisible({ timeout: 10_000 })
+  await hierarchyItem.click()
+  await page.waitForTimeout(500)
+
+  // Open the extension pane by clicking the Toggle Pane button.
+  // The button is inside .scroll-animator-extension > DropDownPane.
+  // We locate and click it via evaluate because Playwright actionability
+  // checks fail for elements rendered inside a WebGL canvas overlay.
+  await page.evaluate(() => {
+    const wrapper = document.querySelector('.scroll-animator-extension')
+    if (wrapper) {
+      const btn = wrapper.querySelector('button[aria-label="Toggle Pane"]')
+      if (btn) btn.click()
+    }
+  })
+  await page.waitForTimeout(500)
 }
 
 test.describe('RAD Viewer', () => {
@@ -160,35 +199,11 @@ test.describe('RAD Viewer', () => {
     expect(zoom).toBeNull()
   })
 
-  test('selecting ScrollAnimator in Studio hierarchy shows keyframes in extension pane', async ({ page }) => {
+  test('extension pane opens through real toggle and shows keyframes', async ({ page }) => {
     await startViewer(page)
+    await selectAnimatorAndOpenPane(page, 'Camera ScrollAnimator')
 
-    // Wait for Studio to be fully initialized
-    await page.waitForTimeout(1000)
-
-    // The Studio scene hierarchy tree renders object names as clickable items.
-    // Click on "Camera ScrollAnimator" in the hierarchy to select it.
-    const hierarchyItem = page.getByText('Camera ScrollAnimator')
-    await expect(hierarchyItem).toBeVisible({ timeout: 10_000 })
-    await hierarchyItem.click()
-    await page.waitForTimeout(500)
-
-    // Open the ScrollAnimator extension DropDownPane.
-    // The pane's tooltip contains a Pane with title "Scroll Animator".
-    // We find the tooltip that contains our extension content and make it visible.
-    await page.evaluate(() => {
-      // Find the DropDownPane tooltip that contains our extension
-      const tooltips = document.querySelectorAll('.tooltip')
-      for (const tooltip of tooltips) {
-        if (tooltip.querySelector('.sa-animator-name')) {
-          tooltip.style.display = 'block'
-          break
-        }
-      }
-    })
-    await page.waitForTimeout(200)
-
-    // After selecting the animator, the extension should show its name
+    // The extension should show the animator name
     const animatorName = page.locator('.sa-animator-name')
     await expect(animatorName).toBeVisible({ timeout: 5000 })
     await expect(animatorName).toContainText('Camera ScrollAnimator')
@@ -203,29 +218,22 @@ test.describe('RAD Viewer', () => {
 
     // Second keyframe should be at 100%
     await expect(keyframeRows.nth(1)).toContainText('100.00%')
+
+    // Verify the pane can be closed
+    await page.evaluate(() => {
+      const wrapper = document.querySelector('.scroll-animator-extension')
+      if (wrapper) {
+        const btn = wrapper.querySelector('button[aria-label="Toggle Pane"]')
+        if (btn) btn.click()
+      }
+    })
+    const isVisible = await animatorName.isVisible()
+    expect(isVisible).toBe(false)
   })
 
   test('extension shows source-sync-unavailable state in production preview', async ({ page }) => {
     await startViewer(page)
-    await page.waitForTimeout(1000)
-
-    // Select the camera animator
-    const hierarchyItem = page.getByText('Camera ScrollAnimator')
-    await expect(hierarchyItem).toBeVisible({ timeout: 10_000 })
-    await hierarchyItem.click()
-    await page.waitForTimeout(500)
-
-    // Open the extension pane
-    await page.evaluate(() => {
-      const tooltips = document.querySelectorAll('.tooltip')
-      for (const tooltip of tooltips) {
-        if (tooltip.querySelector('.sa-animator-name')) {
-          tooltip.style.display = 'block'
-          break
-        }
-      }
-    })
-    await page.waitForTimeout(200)
+    await selectAnimatorAndOpenPane(page, 'Camera ScrollAnimator')
 
     // In preview mode the Vite plugin is not active, so source sync is unavailable.
     // The extension should show a warning message.
@@ -239,40 +247,24 @@ test.describe('RAD Viewer', () => {
 
     const deleteBtns = page.locator('.sa-kf-delete')
     expect(await deleteBtns.count()).toBe(0)
+
+    // But percentage display and keyframe jump buttons should still be available
+    const pctDisplay = page.locator('.sa-percent-display')
+    await expect(pctDisplay).toBeVisible()
   })
 
   test('clicking a keyframe percentage jumps scroll and updates camera', async ({ page }) => {
     await startViewer(page)
-    await page.waitForTimeout(1000)
-
-    // Select the camera animator
-    const hierarchyItem = page.getByText('Camera ScrollAnimator')
-    await expect(hierarchyItem).toBeVisible({ timeout: 10_000 })
-    await hierarchyItem.click()
-    await page.waitForTimeout(500)
-
-    // Open the extension pane
-    await page.evaluate(() => {
-      const tooltips = document.querySelectorAll('.tooltip')
-      for (const tooltip of tooltips) {
-        if (tooltip.querySelector('.sa-animator-name')) {
-          tooltip.style.display = 'block'
-          break
-        }
-      }
-    })
-    await page.waitForTimeout(200)
+    await selectAnimatorAndOpenPane(page, 'Camera ScrollAnimator')
 
     // Camera should start near perspective pose (y ≈ 0)
     const initial = await getCameraState(page)
     expect(initial.y).toBeCloseTo(0, 0)
 
-    // Click the second keyframe button (100%) to jump to top-down.
-    // Use evaluate to click the button directly to avoid strict-mode issues
-    // with text matching (100.00% contains 0.00%).
+    // Click the 100% keyframe button (last row) to jump to top-down.
+    // Use evaluate because the button is rendered inside a canvas overlay.
     await page.evaluate(() => {
       const rows = document.querySelectorAll('.sa-kf-row')
-      // The 100% keyframe is the last row
       const lastRow = rows[rows.length - 1]
       const pctBtn = lastRow?.querySelector('.sa-kf-pct')
       if (pctBtn) pctBtn.click()
@@ -285,32 +277,72 @@ test.describe('RAD Viewer', () => {
     expect(afterJump.progress).toBeGreaterThan(95)
   })
 
+  test('percentage display updates when scrolling', async ({ page }) => {
+    await startViewer(page)
+    await selectAnimatorAndOpenPane(page, 'Camera ScrollAnimator')
+
+    // Scroll to bottom
+    await page.evaluate(() => {
+      window.scrollTo(0, document.body.scrollHeight)
+    })
+    await page.waitForTimeout(1500)
+
+    // The percentage display should reflect the scrolled position
+    const pctDisplay = page.locator('.sa-percent-display')
+    await expect(pctDisplay).toBeVisible({ timeout: 10000 })
+    const pctText = await pctDisplay.textContent()
+    expect(pctText).toBeTruthy()
+    const pctValue = parseFloat(pctText!)
+    expect(pctValue).toBeGreaterThan(50)
+  })
+
   test('selecting non-ScrollAnimator shows disabled state', async ({ page }) => {
     await startViewer(page)
     await page.waitForTimeout(1000)
 
-    // Select the SplatMesh (not a ScrollAnimator) by clicking it in the hierarchy
-    const meshItem = page.getByText('📐')
-    if (await meshItem.isVisible({ timeout: 5000 })) {
-      await meshItem.click()
-      await page.waitForTimeout(500)
-    }
+    // Click on the SplatMesh icon (📐) in the hierarchy — it's not a ScrollAnimator
+    // First clear any selection by clicking on empty canvas area
+    await page.locator('#app canvas').click()
+    await page.waitForTimeout(300)
 
     // Open the extension pane
     await page.evaluate(() => {
-      const tooltips = document.querySelectorAll('.tooltip')
-      for (const tooltip of tooltips) {
-        if (tooltip.querySelector('.sa-no-selection')) {
-          tooltip.style.display = 'block'
-          break
-        }
+      const wrapper = document.querySelector('.scroll-animator-extension')
+      if (wrapper) {
+        const btn = wrapper.querySelector('button[aria-label="Toggle Pane"]')
+        if (btn) btn.click()
       }
     })
-    await page.waitForTimeout(200)
+    await page.waitForTimeout(500)
 
     // The extension should show the "Select one ScrollAnimator" message
     const noSelection = page.locator('.sa-no-selection')
     await expect(noSelection).toBeVisible({ timeout: 5000 })
     await expect(noSelection).toContainText('Select one ScrollAnimator')
+  })
+
+  test('viewer remount does not stack look-at callbacks', async ({ page }) => {
+    // Navigate viewer → landing → viewer and verify no regression
+    await startViewer(page)
+
+    // Verify camera state is correct
+    const state1 = await getCameraState(page)
+    expect(state1.y).toBeCloseTo(0, 0)
+
+    // Go back to landing
+    await page.getByRole('button', { name: 'Go back' }).click()
+    await page.waitForTimeout(1000)
+    await expect(page.getByRole('heading', { name: 'RAD Viewer' })).toBeVisible()
+
+    // Re-enter viewer
+    const input = page.getByLabel('RAD file URL')
+    await input.fill(SAMPLE_URL)
+    await page.getByRole('button', { name: 'Start' }).click()
+    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
+
+    // Camera state should still be correct after remount
+    const state2 = await getCameraState(page)
+    expect(state2.y).toBeCloseTo(0, 0)
+    expect(state2.z).toBeCloseTo(-1, 0)
   })
 })

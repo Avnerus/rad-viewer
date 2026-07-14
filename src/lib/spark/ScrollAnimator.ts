@@ -5,7 +5,7 @@
  * Keyframes are stored as plain data arrays for source serialization.
  * The `keyframes` setter owns canonical deep copies.
  */
-import { Object3D, Vector3, Quaternion } from 'three'
+import { Object3D } from 'three'
 import type { ScrollKeyframe } from './scrollAnimation'
 import { canonicalizeKeyframes, sampleKeyframes } from './scrollAnimation'
 
