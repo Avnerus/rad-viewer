@@ -221,7 +221,7 @@ describe('createSparkStudioRenderer', () => {
       expect(SparkRenderer.sparkOverride).toBeUndefined()
     })
 
-    it('editor camera: does not set sparkOverride', () => {
+    it('editor camera: sets sparkOverride to editorRenderer inside callback', () => {
       let observedOverride: SparkRenderer | undefined
       const mockFn = vi.fn(() => {
         observedOverride = SparkRenderer.sparkOverride
@@ -235,8 +235,34 @@ describe('createSparkStudioRenderer', () => {
       SparkRenderer.sparkOverride = undefined
       editorR.onBeforeRender(renderer, scene, editorCamera)
 
-      // Editor path does not set sparkOverride
-      expect(observedOverride).toBeUndefined()
+      // Editor path pins override to editorRenderer
+      expect(observedOverride).toBe(editorR)
+      expect((observedOverride as SparkRenderer).enableDriveLod).toBe(false)
+      // After the call, override is restored
+      expect(SparkRenderer.sparkOverride).toBeUndefined()
+    })
+
+    it('editor camera: overrides a pre-existing non-undefined sparkOverride', () => {
+      let observedOverride: SparkRenderer | undefined
+      const mockFn = vi.fn(() => {
+        observedOverride = SparkRenderer.sparkOverride
+      })
+      const { handle } = createWithMockedOnBeforeRender(mockFn)
+      const editorR = handle.editorRenderer!
+
+      const editorCamera = new THREE.PerspectiveCamera()
+      editorCamera.userData.editorCamera = true
+
+      // Simulate a pre-existing foreign override (e.g. from a nested render)
+      const foreignOverride = {} as unknown as SparkRenderer
+      SparkRenderer.sparkOverride = foreignOverride
+
+      editorR.onBeforeRender(renderer, scene, editorCamera)
+
+      // Inside the callback, override should be editorRenderer (not the foreign one)
+      expect(observedOverride).toBe(editorR)
+      // After the call, the foreign override is restored
+      expect(SparkRenderer.sparkOverride).toBe(foreignOverride)
     })
 
     it('real camera: shares lodInstances after onBeforeRender', () => {
@@ -275,8 +301,13 @@ describe('createSparkStudioRenderer', () => {
     })
 
     it('preserves pre-existing sparkOverride for real camera', () => {
-      const { handle } = createWithMockedOnBeforeRender()
+      let observedOverride: SparkRenderer | undefined
+      const mockFn = vi.fn(() => {
+        observedOverride = SparkRenderer.sparkOverride
+      })
+      const { handle } = createWithMockedOnBeforeRender(mockFn)
       const editorR = handle.editorRenderer!
+      const realR = handle.realRenderer!
 
       const previousOverride = {} as unknown as SparkRenderer
       SparkRenderer.sparkOverride = previousOverride
@@ -285,6 +316,10 @@ describe('createSparkStudioRenderer', () => {
       realCamera.userData.editorCamera = false
 
       editorR.onBeforeRender(renderer, scene, realCamera)
+
+      // Inside callback, override is realRenderer (not the previous one)
+      expect(observedOverride).toBe(realR)
+      // After the call, previous override is restored
       expect(SparkRenderer.sparkOverride).toBe(previousOverride)
     })
 

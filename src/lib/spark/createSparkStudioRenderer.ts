@@ -17,10 +17,11 @@ import type { SparkRendererOptions } from '@sparkjsdev/spark'
  *   renders display the same LOD selection.
  *
  * The editor renderer's `onBeforeRender` is wrapped to detect editor cameras
- * (`camera.userData.editorCamera === true`). For editor cameras it shares LOD
- * from the real renderer and renders normally (using itself). For real/default
- * cameras it drives the real renderer's LOD update via `sparkOverride`, then
- * falls through to the normal editor-renderer path.
+ * (`camera.userData.editorCamera === true`). Both branches pin their intended
+ * Spark override for the duration of the original `onBeforeRender` callback
+ * and restore the prior override in `try/finally`:
+ *   - Editor camera → share LOD → sparkOverride = editorRenderer → call → restore
+ *   - Real/default camera → sparkOverride = realRenderer → call → restore → share LOD
  */
 export interface SparkStudioRendererHandle {
   /**
@@ -98,20 +99,23 @@ export function createSparkStudioRenderer(
       scene: THREE.Scene,
       camera: THREE.Camera,
     ): void => {
-      if (camera.userData.editorCamera === true) {
-        // Editor camera: share LOD from real renderer, then render normally
-        shareLodInstances()
-        originalOnBeforeRender(renderer, scene, camera)
-      } else {
-        // Real/default camera: drive LOD via real renderer using sparkOverride,
-        // then render normally through editor renderer which picks up the data
+      const callWithOverride = (spark: SparkRenderer): void => {
         const previous = SparkRenderer.sparkOverride
         try {
-          SparkRenderer.sparkOverride = realRenderer
+          SparkRenderer.sparkOverride = spark
           originalOnBeforeRender(renderer, scene, camera)
         } finally {
           SparkRenderer.sparkOverride = previous
         }
+      }
+
+      if (camera.userData.editorCamera === true) {
+        // Editor camera: share LOD from real renderer, pin override to editorRenderer
+        shareLodInstances()
+        callWithOverride(editorRenderer!)
+      } else {
+        // Real/default camera: pin override to realRenderer (drives LOD), then share
+        callWithOverride(realRenderer!)
         shareLodInstances()
       }
     }
