@@ -1,109 +1,74 @@
-# Follow-up mission: make ScrollAnimator authoring genuinely usable and lifecycle-safe
+# Final follow-up mission: close remaining ScrollAnimator evidence and interaction gaps
 
 ## Objective
 
-Correct the first ScrollAnimator implementation without redesigning the accepted feature. Retain GSAP ScrollTrigger with boolean `scrub: true`, the `ScrollAnimator` keyframe model, Studio source transactions, the camera/CameraTarget hierarchy, and the removal of free navigation.
+Finish the existing ScrollAnimator implementation without redesigning it. The second pass correctly introduced scene-wide playback, a shared ScrollTrigger runtime, public Studio APIs, `useTask`, structural branding, and deduplication. Preserve those improvements.
 
-The current implementation passes its reported tests but does not yet satisfy the mission in actual authoring use. Fix the concrete gaps below, add regression coverage that interacts with the real UI rather than bypassing it, perform the required manual source-write verification, update documentation, and produce an accurate final status report.
+Correct the remaining small functional defects, prove that the Studio controls are operable through real pointer/keyboard interaction, perform the mandatory dev-mode source-authoring experiment, and write an honest final report. This mission is not complete if any mandatory verification is skipped.
 
-## Verified problems to fix
+## Remaining verified issues
 
-1. **The extension pane toggle does not open the pane.** `ScrollAnimatorExtension.svelte` passes a custom `toggle` callback to `DropDownPane` that only flips `extension.state.paneVisible`; it never calls the pane's `show()`/`hide()` behavior that changes `.tooltip.style.display`. E2E tests conceal this by directly setting `.tooltip.style.display = 'block'` with `page.evaluate()`.
-2. **Scroll playback is not generic.** `applyScrollAnimators()` hard-codes only `cameraAnimator` and `targetAnimator`, while the feature and `AGENTS.md` claim one trigger drives every scene `ScrollAnimator`. A newly added animator would never play.
-3. **The WebGLRenderer render wrapper is unsafe.** `RadViewerScene.svelte` replaces `renderer.render`, never restores it on destroy, and can stack stale closures when leaving/re-entering the viewer. This also creates an unnecessary second render wrapper beside the Spark/Studio integration.
-4. **The extension does not consume ScrollTrigger's progress/range.** It polls DOM geometry every 100 ms and jumps using an independently calculated spacer range. This can disagree with ScrollTrigger after refresh and does not meet the accepted trigger-range design.
-5. **Typing a percentage is unstable.** The 100 ms interval continually replaces `percentageInput`, including while the user is editing it.
-6. **Undo/redo can leave the keyframe list stale.** Transaction writes update `animator.keyframes`, but the selection-derived effect does not react to that plain property change.
-7. **HMR-safe branding is undermined by `instanceof`.** Selection accepts the `isScrollAnimator` brand, then list/actions require `instanceof ScrollAnimator`, which can reject a branded instance across HMR/class replacement.
-8. **Unnecessary private Studio imports and Vite aliases were added.** Installed Studio 0.4.3 publicly exports `useObjectSelection` and `useTransactions` from `@threlte/studio/extensions`; `useTransactions()` exposes `vitePluginEnabled`, and `buildTransaction()` derives source metadata from the object's Studio metadata. The local aliases/types add fragility and 33 lint warnings.
-9. **Keyframe canonicalization does not deduplicate raw frames that normalize to the same percentage.** This can leave ambiguous brackets/source after clamping/rounding.
-10. **Required evidence is missing.** The report describes code/unit behavior but does not document the manual dev source-write experiment required by the mission. It also claims completion despite 33 lint warnings.
-11. **Finalization protocol was not followed.** Commit `f518acd` changed tests after `status.md` was written, so the report omits the final commit/state.
+1. `transactionGuard.ts` claims to allow path-prefixed keyframe metadata, but checks `attributeName.startsWith('keyframes.')`. Studio builds nested attribute names as `[...pathItems, propertyPath].join('.')`, so a path-prefixed keyframe is `some.path.keyframes`, not `keyframes.some.path`. The current guard can suppress a legitimate nested keyframe sync and can allow arbitrary child attributes under `keyframes`.
+2. Source-sync-unavailable UI shows only a percentage label, not the requested numeric percentage input. Typed percentage jumps should remain available because they do not mutate source.
+3. `updateDebugState()` runs only when scroll progress changes. Moving the camera/target animator in Studio while stationary leaves world-space debug state stale even though the `useTask` updates look-at every frame.
+4. `eslint.config.js` was globally relaxed to ignore underscore-prefixed arguments just to accommodate the unused `useTask` delta. Avoid changing global lint policy; omit the unused argument instead.
+5. E2E uses `HTMLElement.click()` inside `page.evaluate()` for the pane toggle and keyframe buttons. This bypasses Playwright/browser actionability and hit testing. It proves the handler works, but not that a human can click the UI.
+6. The fixed-toolbar/pane viewport test required by the follow-up mission was removed rather than stabilized.
+7. The mandatory manual source-authoring experiment was explicitly not performed. Source persistence and transform-write suppression therefore remain unverified in the real Vite/Studio integration.
+8. The status report marks the overall problem set resolved while admitting mandatory criteria were skipped. The next report must mark only genuinely verified criteria as met.
 
 ## Files likely involved
 
-- `src/lib/components/RadViewerScene.svelte`
-- `src/lib/spark/scrollAnimation.ts`
-- `src/lib/spark/ScrollAnimator.ts`
-- `src/lib/studio/scroll-animator/ScrollAnimatorExtension.svelte`
-- New shared runtime bridge/store, preferably `src/lib/studio/scroll-animator/scrollAnimatorRuntime.svelte.ts` or a similarly scoped module
 - `src/lib/studio/scroll-animator/transactionGuard.ts`
-- Remove `src/lib/studio/scroll-animator/studio-types.d.ts`
-- `src/gsap.d.ts` only for accurate types actually used
-- `vite.config.ts` to remove private Studio aliases
-- `tests/unit/scrollAnimation.test.ts`
+- `src/lib/studio/scroll-animator/ScrollAnimatorExtension.svelte`
+- `src/lib/components/RadViewerScene.svelte`
 - `tests/unit/transactionGuard.test.ts`
-- New tests for the runtime bridge/store if created
 - `tests/e2e/rad-viewer.spec.ts`
-- `AGENTS.md`
-- `.codex-handoff/status.md` as the final file modification
+- `eslint.config.js` (restore the pre-follow-up rule)
+- `AGENTS.md` only if final behavior/evidence references change
+- `.codex-handoff/status.md` as the last file modification
 
-Do not scan or change unrelated repository areas.
+Do not scan or modify unrelated areas.
 
-## Required design
+## Required corrections
 
-### 1. Use ScrollTrigger as the single progress/range authority
+### 1. Correct the source-sync allowlist
 
-Create a small shared runtime bridge owned by the app scene but readable by the Studio extension. It must expose at least:
-
-- current percentage as reactive Svelte state;
-- the active ScrollTrigger instance/range;
-- attach/detach lifecycle guarded by instance identity;
-- `updateProgress(progress01)` called from initial setup and `onUpdate`;
-- `jumpToPercentage(percent)` using the active trigger's measured `start`, `end`, and `scroll()`.
-
-Suggested shape (adapt to Svelte 5 conventions and actual types):
+Allow only an attribute whose final path segment is exactly `keyframes`:
 
 ```ts
-class ScrollAnimatorRuntime {
-  percentage = $state(0)
-  private trigger: ScrollTriggerInstance | null = null
-
-  attach(trigger: ScrollTriggerInstance) {
-    this.trigger = trigger
-    this.updateProgress(trigger.progress)
-  }
-
-  detach(trigger: ScrollTriggerInstance) {
-    if (this.trigger === trigger) this.trigger = null
-  }
-
-  updateProgress(progress: number) {
-    this.percentage = clampPercentage(progress * 100)
-  }
-
-  jumpToPercentage(percent: number) {
-    if (!this.trigger) return
-    this.trigger.scroll(
-      percentageToScroll(percent, this.trigger.start, this.trigger.end),
-    )
-  }
+function isKeyframesAttribute(attributeName: string): boolean {
+  return attributeName === 'keyframes' || attributeName.endsWith('.keyframes')
 }
 ```
 
-Reset stale state appropriately when the viewer unmounts. Do not poll with `setInterval`, do not independently calculate spacer geometry in the extension, and do not use raw `window.scrollTo` for authored percentage jumps.
+Do not allow `keyframes.0`, `keyframes.position`, or another descendant attribute. Add unit cases for:
 
-Keep exactly one `ScrollTrigger.create` with literal boolean `scrub: true`. No numeric scrub, tween, timeline, raw scroll listener, or continuous animator-transform task.
+- `keyframes` → allowed;
+- `scene.camera.keyframes` → allowed;
+- `keyframes.0` → blocked;
+- `scene.keyframes.position` → blocked;
+- `position`, `rotation`, `scale`, and another property → blocked;
+- non-ScrollAnimator transactions unchanged.
 
-### 2. Drive every scene ScrollAnimator
+The real camera and target animator `<T>` nodes currently use a root `keyframes` attribute, but the guard contract and documentation must still be correct.
 
-On initial trigger application and every ScrollTrigger `onUpdate`, traverse the Threlte scene (or use a correctly cleaned registry) and apply the percentage to every branded object:
+### 2. Share percentage navigation UI across source-sync states
 
-```ts
-scene.traverse((object) => {
-  if (isScrollAnimator(object)) {
-    object.applyScrollPercentage(percent)
-  }
-})
-```
+Render the current percentage label and numeric percentage input whenever exactly one ScrollAnimator is selected, regardless of `transactions.vitePluginEnabled`. Only source-mutating controls must be conditional:
 
-Use a structural/HMR-safe type guard that verifies the brand and callable method. Do not require `instanceof` in runtime or extension logic. Keep the two literal camera/target `<T>` nodes for source metadata, but do not special-case them in playback.
+- `Insert/save scroll keyframe` disabled/hidden when source sync is unavailable;
+- delete controls disabled/hidden when source sync is unavailable;
+- percentage input and keyframe jump buttons remain enabled;
+- warning clearly explains that persistence controls are unavailable.
 
-Update debug state after world matrices are current; it must remain world-space and reflect target/camera changes made while stationary where relevant.
+Reuse one percentage-input markup/handler path instead of duplicating logic across branches. Preserve the focus-aware draft behavior.
 
-### 3. Use a Threlte task for camera look-at
+Prevent the Enter→blur sequence from calling `jumpToPercentage` twice. A small commit guard or an Enter handler that relies on blur for the single commit is sufficient. Add focused coverage if a component seam is available.
 
-Remove the `renderer.render = ...` assignment entirely. Use public `useTask` from `@threlte/core`:
+### 3. Keep world-space debug state current
+
+In the existing `useTask`, after updating `camera.lookAt`, also update debug state so stationary Studio transforms of either animator are observable:
 
 ```ts
 useTask(() => {
@@ -113,142 +78,102 @@ useTask(() => {
 }, { autoInvalidate: false })
 ```
 
-Reuse `Vector3` scratch instances rather than allocating every frame. Confirm the task is automatically cleaned up with the component and that it runs in the normal Threlte render schedule before rendering. Do not alter `SparkStudioBridge` or `createSparkStudioRenderer`.
+Use no unused callback argument. Restore `eslint.config.js` to its prior `@typescript-eslint/no-unused-vars: 'warn'` setting. Do not suppress warnings globally.
 
-### 4. Make the extension pane work through public UI behavior
+Do not reintroduce a renderer wrapper or animator-transform task. The task may update look-at/debug only; ScrollTrigger remains the sole animator-transform driver.
 
-Use `DropDownPane`'s normal default toggle behavior. The simplest correct form is:
+### 4. Make real pointer interaction work and test it honestly
 
-```svelte
-<ToolbarItem position="left">
-  <div class="scroll-animator-extension">
-    <DropDownPane title="Scroll Animator">
-      <!-- UI -->
-    </DropDownPane>
-  </div>
-</ToolbarItem>
-```
-
-Do not override `toggle` unless invoking the component's actual `show()`/`hide()` API. Persistent open state is not required. Add a stable wrapper/test selector so E2E can click the extension's real `Toggle Pane` button without confusing it with other Studio panes.
-
-Remove every E2E `page.evaluate()` that forces `.tooltip` display or directly invokes extension DOM button `.click()` merely to bypass user interaction. Tests must click the real toggle and visible keyframe buttons through Playwright locators.
-
-Verify the pane and Studio toolbar stay fixed by comparing their viewport bounding boxes before and after page scrolling.
-
-### 5. Make percentage editing stable
-
-Read current percentage from the shared ScrollTrigger runtime. Remove the interval and geometry helpers.
-
-Keep a separate draft string for the numeric input. Sync the draft from runtime percentage only while the input is not focused/being edited. On Enter or blur:
-
-- parse and clamp;
-- jump through the runtime bridge;
-- restore a valid formatted draft;
-- avoid a double commit from Enter followed by blur if it would cause observable trouble.
-
-The current percentage display should continue updating from ScrollTrigger while normal scrolling occurs.
-
-### 6. Use only public Studio extension APIs
-
-Use:
+Replace direct DOM `.click()` calls in `page.evaluate()` with normal Playwright interactions:
 
 ```ts
-import { useObjectSelection, useTransactions } from '@threlte/studio/extensions'
+const toggle = page.locator(
+  '.scroll-animator-extension button[aria-label="Toggle Pane"]',
+)
+await toggle.click()
 ```
 
-Obtain `vitePluginEnabled` from the returned transactions API. `buildTransaction({ object, propertyPath: 'keyframes', ... })` already constructs sync metadata from `object.userData.threlteStudio`; do not import `getThrelteStudioUserData` or override `tx.sync` unless a real manual source-write test proves the public API insufficient.
+Use visible locators for keyframe buttons and normal `.click()`. `page.evaluate()` remains acceptable for reading hidden debug attributes or setting document scroll position; it is not acceptable for invoking extension controls.
 
-Remove the four private Vite aliases and delete `studio-types.d.ts`. Do not import private `Transaction` types. Define a narrow local structural transaction type for the guard, e.g. object plus optional sync/attributeName, without `any`.
+If normal click fails, diagnose the actual actionability error before changing tests:
 
-The transaction guard must continue to suppress all ScrollAnimator source attributes except the final `keyframes` segment. Handle possible `pathItems` safely (e.g. allow `keyframes` or an attribute name ending in `.keyframes`) while ensuring transform props remain blocked on commit, undo, and redo.
+- inspect the toggle bounding box and `document.elementFromPoint()` at its center;
+- inspect computed `pointer-events`, visibility, z-index, and any overlapping `.viewer-header`, canvas, loading overlay, Studio pane, or hierarchy pane;
+- fix the smallest real CSS/layout/accessibility cause so a human pointer can operate it;
+- do not use `{ force: true }`, `dispatchEvent('click')`, JS `.click()`, direct style mutation, or temporary element hiding as a workaround.
 
-### 7. Keep extension keyframes reactive across transactions
+The hierarchy is already clicked normally, so the extension toolbar control should also be made normally actionable.
 
-After commit, undo, or redo, refresh the selected animator's displayed keyframes from its getter. Reuse the transaction subscription so guard behavior and UI refresh occur consistently, or introduce a small explicit revision state.
+Add stable semantic selectors/test IDs only where needed. Do not couple tests to generic `.tooltip` instances.
 
-History arrays must remain deep-cloned. Do not assign `animator.keyframes` redundantly after `transactions.commit()` if the transaction write already did so.
+### 5. Restore the fixed-position viewport test
 
-All extension operations must use the HMR-safe branded structural type, not `instanceof ScrollAnimator`.
+With the pane open through a real click:
 
-### 8. Canonicalize duplicate percentages deterministically
+1. Record bounding boxes for the Studio toolbar and extension pane.
+2. Scroll the document substantially using `window.scrollTo`.
+3. Wait for ScrollTrigger/UI update.
+4. Record bounding boxes again.
+5. Assert viewport `x/y` remain stable within a small tolerance and both remain visible/actionable.
 
-`canonicalizeKeyframes()` must collapse entries whose percentages become equal after clamp/round. Define deterministic last-write-wins behavior, preserve sorted order, and deep-copy all tuples. Add cases for raw duplicates, rounding collisions, and clamp collisions at 0 and 100.
+GPU stalls are not a reason to omit the criterion. Use one batched `page.evaluate()` to read bounding rectangles if individual locator calls time out, but do not mutate or click DOM through evaluate. Increase a targeted timeout only as needed.
 
-### 9. Eliminate warnings and correct declarations
+### 6. Perform the real dev source-authoring experiment
 
-Remove unused imports and all `no-explicit-any` warnings introduced by this feature. `npm run lint` must report zero errors and zero warnings.
+This is mandatory and must use the development server, not production preview/stub E2E:
 
-Correct `src/gsap.d.ts` to the actual GSAP API used. In particular, official ScrollTrigger `maxScroll()` returns a number, not `{ y: number }`; remove unused declarations rather than guessing them.
+1. Ensure the working tree is otherwise understood and preserve unrelated changes.
+2. Start the real dev server with the Threlte Studio Vite plugin.
+3. Enter the viewer, select `Camera ScrollAnimator`, and open the extension with an actual pointer click.
+4. Jump to a nonexisting normalized percentage using the visible numeric input.
+5. Move and rotate the animator using Studio transform controls. Stop and wait; verify boolean scrub does not snap the pose back while scroll progress is stationary.
+6. Capture a targeted `git diff` of `RadViewerScene.svelte`. Verify the gizmo action did **not** add/change `position`, `rotation`, `scale`, or another transform prop on the animator `<T>`.
+7. Click `Insert/save scroll keyframe`, wait for source sync, and verify the correct camera animator's literal `keyframes={...}` changed at the chosen percentage.
+8. Edit and save again at the same normalized percentage; verify replacement, not duplication.
+9. Delete the temporary frame; verify source and visible list update.
+10. Exercise Studio undo and redo; verify the visible list and source remain consistent.
+11. Repeat a minimal insert/delete on `Camera Target ScrollAnimator` to prove per-node source targeting.
+12. Restore only temporary experiment keyframes so the final checked-in authored defaults remain intentional.
 
-## Manual source-authoring verification (mandatory)
-
-After automated tests pass, run the application in dev mode with the real Studio Vite integration and perform this controlled experiment:
-
-1. Select `Camera ScrollAnimator` using the Studio hierarchy.
-2. Open the extension pane by clicking its real toolbar toggle.
-3. Jump to a percentage, move/rotate the animator with Studio controls, stop, and wait. Confirm boolean scrub does not snap it back while scroll progress is stationary.
-4. Inspect the source diff: gizmo manipulation must not add/change `position`, `rotation`, `scale`, or another transform attribute on the animator `<T>`.
-5. Click `Insert/save scroll keyframe`; wait for source sync and confirm the correct literal `<T>` node's `keyframes={...}` changes.
-6. Save again at the same normalized percentage and confirm replacement rather than duplication.
-7. Delete that frame and confirm the correct source/list change.
-8. Exercise undo and redo and confirm both source and visible list remain consistent.
-9. Confirm the target animator can be authored independently.
-10. Restore only the temporary experiment keyframes before final tests/reporting.
-
-Record exact observed source-diff evidence in `status.md`. Code inspection or unit tests alone do not satisfy this requirement.
+If a step fails, diagnose and fix it; do not report the mission complete. The final report must state the chosen percentage and summarize the exact before/after source diff for each operation. Screenshots are optional; source-diff evidence is required.
 
 ## Acceptance criteria
 
-- The extension pane opens and closes through its real toolbar control; no CSS/display test bypass is needed.
-- Studio toolbar and extension pane remain fixed in the viewport while document scrolling changes.
-- One GSAP ScrollTrigger with boolean `scrub: true` drives every branded ScrollAnimator in the scene.
-- Newly added/future scene ScrollAnimator instances require no hard-coded playback call.
-- The extension percentage and jumps use the active trigger's `progress`, `start`, `end`, and `scroll()` through one runtime bridge.
-- There is no polling interval, independent spacer-percentage math, raw window jump, numeric scrub, or animator-transform RAF/effect loop.
-- Numeric percentage typing is not overwritten while focused and commits correctly on Enter/blur.
-- Camera look-at uses `useTask`; `renderer.render` is never replaced by `RadViewerScene` and cannot stack across viewer remounts.
-- Camera and target debug state is world-space and updates correctly.
-- Selection/actions use an HMR-safe structural brand, not `instanceof ScrollAnimator`.
-- Public `@threlte/studio/extensions` imports are used; private Studio aliases, declarations, metadata import, and transaction type imports are gone.
-- Source-sync unavailable state still disables only mutation controls with a clear message; playback, current percentage, typed jumps, and keyframe jumps remain useful.
-- Insert/update/delete/undo/redo immediately keep the visible keyframe list and animator data consistent with independent arrays.
-- Only `keyframes` is source-synced for ScrollAnimator objects; transform attributes remain blocked through commit/undo/redo.
-- Raw duplicate/rounded/clamped keyframe percentages canonicalize deterministically to one frame per percentage.
-- Manual dev verification proves correct keyframe source writes and proves gizmo transforms do not write transform props.
-- Existing Spark dual-renderer routing, editor-camera LOD safety, splat lifecycle, fixed canvas/scroll spacer, URL flow, and device behavior are unchanged.
-- Free navigation remains removed and GSAP remains installed.
-- `npm run check`, `npm run lint`, `npm run test:unit`, `npm run test:e2e`, and `npm run build` pass; lint has zero warnings.
-- `AGENTS.md` accurately describes the final implementation without false claims about traversal, renderer wrapping, or private APIs.
-- Final `status.md` describes the exact last pushed source/test state and no commit modifies files after it is written.
+- Transaction guard allows only root/path-prefixed attributes whose final segment is `keyframes`; descendant attributes are blocked.
+- Current percentage and typed jumps work both with and without Studio source sync.
+- Insert/delete are unavailable with a clear warning when source sync is unavailable.
+- Enter/blur results in one percentage jump, not duplicate calls.
+- `useTask` updates look-at and world debug state without an unused delta argument.
+- Global ESLint policy is restored; lint passes with zero errors and zero warnings.
+- Pane toggle, pane close, keyframe jump, and percentage input use normal Playwright pointer/keyboard interaction—no evaluated click, forced click, event dispatch, style mutation, or hit-test bypass.
+- Studio toolbar and extension pane remain fixed and actionable after document scrolling, covered by E2E.
+- Manual dev authoring proves transform gizmos do not persist animator transforms.
+- Manual dev authoring proves insert/update/delete/undo/redo write the correct literal keyframes source and keep UI consistent.
+- Manual dev authoring proves camera and target animator source writes target their independent `<T>` nodes.
+- One boolean-scrub ScrollTrigger remains the sole animator-transform driver.
+- Scene-wide branded traversal, runtime attach/detach, `useTask`, public Studio imports, deduplication, Spark routing, and all previously correct behavior remain intact.
+- All checks pass: check, lint, unit, E2E, build.
+- `AGENTS.md` and final `status.md` make no false claims and record any genuine unresolved item as unmet.
+- Status is the last file modification and no later implementation/test commit invalidates it.
 
-Re-check every acceptance criterion explicitly before finalizing.
+Re-check every acceptance criterion before finalization. Mandatory criteria may not be waived as “known deviations.”
 
-## Tests to add or correct
+## Tests to update/run
 
-### Unit/component tests
+Add/update:
 
-- Runtime bridge attach/update/jump/detach, trigger replacement, zero range, and no stale trigger after viewer teardown.
-- Scene-wide application helper applies to every branded animator and ignores ordinary Object3Ds.
-- Structural brand works for an object not constructed by the current `ScrollAnimator` class.
-- Duplicate canonicalization: exact duplicates, 2-decimal rounding collisions, values clamped together at 0/100, deterministic last-write-wins.
-- Guard supports public/narrow transaction shape, blocks transform/other attributes, allows root/path-prefixed keyframes, and behaves on commit/undo/redo callbacks.
-- Extension keyframe-list refresh seam after commit, undo, and redo if practical without disk writes.
-- Percentage draft does not update while editing and commits through the runtime bridge.
+- transaction guard suffix/descendant cases listed above;
+- source-sync-unavailable numeric input visibility and typed jump;
+- real pane open/close via normal click;
+- real visible keyframe click via normal click;
+- multi-character numeric entry via normal keyboard input;
+- fixed toolbar/pane viewport geometry before/after scroll;
+- stationary debug update if a stable Studio transform seam exists;
+- retain viewer remount, scene traversal, runtime lifecycle, interpolation, and existing viewer coverage.
 
-### E2E tests
+Remove comments/documentation that normalize `page.evaluate().click()` as an acceptable Studio interaction strategy.
 
-- Select camera animator and click the **real** extension toggle; verify pane content appears, then close/reopen it.
-- Scroll and assert toolbar/pane viewport position remains fixed.
-- Type a multi-character percentage through Playwright keyboard input and verify the jump/progress; do not set input values through DOM evaluation.
-- Click a visible keyframe button normally and verify camera/progress.
-- Verify the source-sync-unavailable branch while retaining visible percentage/jump controls.
-- Select a real non-ScrollAnimator deterministically and verify the disabled state; do not make the selection conditional.
-- Navigate viewer → landing → viewer and verify look-at/render behavior has no stacked stale callback regression.
-- Add a test-only third ScrollAnimator fixture if a safe seam exists and prove scene-wide playback; otherwise cover traversal in unit/component tests.
-
-Automated tests must never mutate checked-in Svelte source. Remove all direct tooltip style manipulation and direct DOM click bypasses from E2E.
-
-Run and report:
+Run after restoring manual experiment edits:
 
 ```bash
 npm run check
@@ -258,60 +183,52 @@ npm run test:e2e
 npm run build
 ```
 
-Trustworthy report output must give exact test counts and exact warning counts.
+Report exact test and warning counts. Trust these results in the report, but do not substitute them for the manual source-write experiment.
 
 ## Things Pi must not change
 
-- Do not remove GSAP/ScrollTrigger or change boolean `scrub: true` to numeric scrub.
-- Do not reintroduce the hard-coded camera tween or free navigation.
-- Do not change the keyframe source shape unless required to fix a demonstrated bug.
-- Do not change SparkStudioBridge, `createSparkStudioRenderer`, Spark override routing, editor-camera markers, LOD ownership, or renderer count.
-- Do not replace or wrap `WebGLRenderer.render` in the scene.
-- Do not change SplatMesh paging/lifecycle/transform or Threlte declarative ownership.
-- Do not change URL validation, sample URL, landing/loading/back behavior, device profile, DPR, WebGL settings, Canvas render mode, or scroll-spacer height.
-- Do not add Theatre.js or a second animation system.
-- Do not access private Studio modules when public extension APIs cover the requirement.
-- Do not mutate source files from automated tests.
-- Do not discard or rewrite unrelated user changes.
+- Do not redesign ScrollAnimator, its keyframe shape, runtime singleton, scene traversal, or percentage precision.
+- Do not remove GSAP/ScrollTrigger or change boolean `scrub: true`.
+- Do not add a tween/timeline, raw scroll listener, polling interval, or continuous animator-transform task.
+- Do not reintroduce free navigation or cameraTween.
+- Do not wrap/replace WebGLRenderer.render.
+- Do not change SparkStudioBridge, dual SparkRenderer routing, override safety, LOD ownership, SplatMesh lifecycle/transform, or editor camera markers.
+- Do not change URL/landing/loading behavior, device profile, DPR, WebGL settings, Canvas render mode, or scroll-spacer height.
+- Do not reintroduce private Studio imports/Vite aliases/types.
+- Do not weaken global lint rules to hide feature warnings.
+- Do not mutate checked-in source from automated tests.
+- Do not discard unrelated user changes during the manual experiment.
 
 ## AGENTS.md update
 
-Update `AGENTS.md` concisely with:
+Keep the current architecture guide, but correct any inaccurate source-guard path wording and remove the claim that evaluated clicks are a normal Studio testing strategy. Document that E2E performs real pointer interaction and that source persistence requires dev-mode manual verification when changed.
 
-- scene-wide branded ScrollAnimator traversal/registry behavior;
-- shared ScrollTrigger runtime bridge and boolean-scrub invariant;
-- public Studio extension imports and source transaction guard;
-- real pane authoring workflow;
-- `useTask` camera-target look-at lifecycle;
-- current debug/test references;
-- manual source-authoring caveat.
-
-Remove claims about renderer wrapping, polling, private aliases, or behavior that is not true in final code. Keep architecture/source references, not an implementation diary.
+AGENTS.md should remain concise and architectural, not an implementation log.
 
 ## Expected completion report
 
 Overwrite `.codex-handoff/status.md` with:
 
 1. **Summary**
-2. **Files changed** (added/modified/deleted)
-3. **Each verified problem above and its resolution**
-4. **Acceptance criteria audit**, one row per criterion with concrete evidence
-5. **Tests added/changed** with exact coverage
-6. **Automated verification results** with commands, counts, errors, and warnings
-7. **Manual source-authoring evidence**, including the observed diff boundaries for transform edit/save/replace/delete/undo/redo
-8. **Lifecycle evidence** for real pane toggle, scene-wide playback, runtime detach, and viewer remount
-9. **Known issues/deviations**
-10. **Implementation commit ids and branch**; the final status-only commit may be identified as pending because its hash cannot be known before the report is committed
+2. **Files changed**
+3. **Each remaining issue above and exact resolution**
+4. **Acceptance criteria audit** with no omitted criteria
+5. **Automated tests and exact results/counts/warnings**
+6. **Real pointer interaction evidence**, including the diagnosed cause if CSS/layout changed
+7. **Fixed-position before/after bounding coordinates**
+8. **Manual source-authoring evidence**: chosen percentage and targeted diff outcomes for gizmo, insert, replacement, delete, undo, redo, and independent target animator
+9. **Known issues**—must be empty for mandatory criteria; otherwise report mission incomplete
+10. **Implementation commit ids/branch**; final status-only commit may be noted as pending
 
 ## Finalization sequence
 
-1. Implement all fixes and tests.
-2. Run automated verification.
-3. Perform the manual source-authoring experiment and restore its temporary edits.
-4. Re-run any checks affected by restoration.
+1. Implement corrections and tests.
+2. Run automated checks.
+3. Perform the full manual dev source-authoring experiment.
+4. Restore temporary authored keyframes and re-run affected checks.
 5. Re-check every acceptance criterion.
-6. Update `AGENTS.md`.
-7. Commit the implementation/tests/docs (except the status report) intentionally if desired.
-8. Write `.codex-handoff/status.md` as the **last file modification**.
-9. Commit the status report and push all commits to the current branch.
-10. After `status.md` is written, do not modify implementation/tests/docs. After pushing, perform no further verification or modification.
+6. Update AGENTS.md.
+7. Commit implementation/tests/docs if desired.
+8. Write `.codex-handoff/status.md` as the final file modification.
+9. Commit the status report and push all commits.
+10. Do not modify or verify anything after the final push.
