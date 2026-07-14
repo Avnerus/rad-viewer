@@ -261,4 +261,105 @@ test.describe('RAD Viewer', () => {
     expect(state2.y).toBeCloseTo(0, 0)
     expect(state2.z).toBeCloseTo(-1, 0)
   })
+
+  // ---------------------------------------------------------------------------
+  // Regression tests for Studio camera ownership
+  // ---------------------------------------------------------------------------
+
+  test('camera debug element has data-active attribute', async ({ page }) => {
+    await startViewer(page)
+    const el = page.getByTestId('camera-state')
+    // Element is visually hidden (clip: rect), so check existence via evaluate
+    await page.waitForFunction(() => {
+      const el = document.querySelector('[data-testid="camera-state"]')
+      return el && el.getAttribute('data-active') !== null
+    }, { timeout: 10_000 })
+    const activeAttr = await el.getAttribute('data-active')
+    expect(activeAttr).toBeTruthy()
+    // With editor camera off (default), the app camera should be active
+    expect(activeAttr).toBe('true')
+  })
+
+  // ---------------------------------------------------------------------------
+  // Regression tests for Studio overlay scroll-safety
+  // ---------------------------------------------------------------------------
+
+  test('Studio toolbar remains at stable viewport coordinates during scroll', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(2000)
+
+    // Get initial toolbar bounding rect
+    const initialRect = await page.evaluate(() => {
+      const toolbar = document.querySelector('.tp-dfwv')
+      if (!toolbar) return null
+      const r = toolbar.getBoundingClientRect()
+      return { top: r.top, left: r.left, bottom: r.bottom, right: r.right }
+    })
+    expect(initialRect).not.toBeNull()
+
+    // Scroll to 50% of document
+    await page.evaluate(() => {
+      window.scrollTo(0, document.body.scrollHeight * 0.5)
+    })
+    await page.waitForTimeout(500)
+
+    // Get scrolled toolbar bounding rect
+    const scrolledRect = await page.evaluate(() => {
+      const toolbar = document.querySelector('.tp-dfwv')
+      if (!toolbar) return null
+      const r = toolbar.getBoundingClientRect()
+      return { top: r.top, left: r.left, bottom: r.bottom, right: r.right }
+    })
+    expect(scrolledRect).not.toBeNull()
+
+    // Coordinates should be stable within a small tolerance (5px)
+    const tolerance = 5
+    const init = initialRect as { top: number; left: number }
+    const scrolled = scrolledRect as { top: number; left: number }
+    expect(Math.abs(scrolled.top - init.top)).toBeLessThan(tolerance)
+    expect(Math.abs(scrolled.left - init.left)).toBeLessThan(tolerance)
+  })
+
+  // ---------------------------------------------------------------------------
+  // Regression tests for Scroll Animator extension UI
+  // ---------------------------------------------------------------------------
+
+  test('Scroll Animator toolbar button has icon and accessible label', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(2000)
+
+    // The toolbar button should have an aria-label for "Toggle Pane"
+    const toggleBtn = await page.evaluate(() => {
+      const wrapper = document.querySelector('.scroll-animator-extension')
+      const btn = wrapper?.querySelector('button[aria-label="Toggle Pane"]')
+      return btn ? {
+        ariaLabel: btn.getAttribute('aria-label'),
+        hasIcon: !!btn.querySelector('svg'),
+      } : null
+    })
+    expect(toggleBtn).not.toBeNull()
+    expect(toggleBtn!.ariaLabel).toBe('Toggle Pane')
+    expect(toggleBtn!.hasIcon).toBe(true)
+  })
+
+  test('open Scroll Animator pane has no inert title button', async ({ page }) => {
+    await startViewer(page)
+    await selectAnimatorAndOpenPane(page, 'Camera ScrollAnimator')
+
+    // Check that the title bar (.tp-rotv_b) inside the tooltip has pointer-events: none
+    const titleBarStyle = await page.evaluate(() => {
+      const tooltip = document.querySelector('.scroll-animator-extension .tooltip')
+      const titleBar = tooltip?.querySelector('.tp-rotv_b')
+      if (!titleBar) return null
+      const computed = window.getComputedStyle(titleBar)
+      return {
+        pointerEvents: computed.pointerEvents,
+        cursor: computed.cursor,
+        hasExpandArrow: !!tooltip.querySelector('.tp-rotv_m'),
+      }
+    })
+    expect(titleBarStyle).not.toBeNull()
+    // Title bar should not be interactive
+    expect(titleBarStyle!.pointerEvents).toBe('none')
+  })
 })

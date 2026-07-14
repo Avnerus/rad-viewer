@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { T, useThrelte, useCamera, useTask } from '@threlte/core'
+  import { T, useThrelte, useTask } from '@threlte/core'
   import { onMount, onDestroy } from 'svelte'
   import { PerspectiveCamera, Object3D, Vector3 } from 'three'
   import { ScrollTrigger } from 'gsap/ScrollTrigger'
@@ -29,13 +29,15 @@
   let targetWorldY = $state(0)
   let targetWorldZ = $state(0)
 
+  // Diagnostic: whether the app camera is currently the active Threlte camera
+  let cameraIsActive = $state(false)
+
   let loaded = $state(false)
   let scrollTrigger: ReturnType<typeof ScrollTrigger.create> | null = null
 
   const threlte = useThrelte()
-  const cameraContext = useCamera()
 
-  // Real camera
+  // Real camera — registered declaratively via makeDefault on <T> below
   const camera = new PerspectiveCamera(60, 1, 0.1, 10_000)
 
   // CameraTarget — an Object3D that the camera always looks at (world position)
@@ -97,12 +99,13 @@
     updateDebugState()
   }, { autoInvalidate: false })
 
+  // Diagnostic: check if our camera is the active Threlte camera
+  useTask(() => {
+    cameraIsActive = threlte.camera.current === camera
+  }, { autoInvalidate: false })
+
   onMount(() => {
     if (typeof window === 'undefined') return
-
-    // Register camera with Threlte context
-    threlte.camera.set(camera)
-    cameraContext.makeDefaultCameras.add(camera)
 
     // Register GSAP ScrollTrigger
     gsap.registerPlugin(ScrollTrigger)
@@ -152,7 +155,7 @@
     { scroll: 100, position: [0, 30, -1], rotation: [0, 0, 0] },
   ]}
 >
-  <T is={camera} name="PerspectiveCamera" />
+  <T is={camera} name="PerspectiveCamera" makeDefault />
 </T>
 
 <!-- Camera Target ScrollAnimator with CameraTarget as child -->
@@ -184,6 +187,7 @@
   data-target-x={targetWorldX.toFixed(3)}
   data-target-y={targetWorldY.toFixed(3)}
   data-target-z={targetWorldZ.toFixed(3)}
+  data-active={cameraIsActive}
   aria-hidden="true"
 ></div>
 

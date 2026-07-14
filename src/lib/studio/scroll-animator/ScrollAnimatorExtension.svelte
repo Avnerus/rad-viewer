@@ -195,7 +195,7 @@
 
 <ToolbarItem position="left">
   <div class="scroll-animator-extension">
-    <DropDownPane title="Scroll Animator">
+    <DropDownPane title="Scroll Animator" icon="mdiAnimationOutline">
       {#if !uiState.animator}
         <div class="sa-no-selection">Select one ScrollAnimator</div>
       {:else}

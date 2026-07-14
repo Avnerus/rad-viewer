@@ -11,9 +11,10 @@ A client-side Threlte/Svelte 5/TypeScript web app for viewing Spark 2.x streamin
 - `src/lib/components/SparkStudioBridge.svelte` — Manages dual SparkRenderer lifecycle via `createSparkStudioRenderer`.
 - `src/lib/spark/ScrollAnimator.ts` — Three.js `Object3D` subclass with `keyframes` property and `applyScrollPercentage()`.
 - `src/lib/spark/scrollAnimation.ts` — Pure keyframe model, canonicalization (with dedup), upsert/delete, bracketing, and interpolation (position lerp + quaternion slerp).
-- `src/lib/studio/scroll-animator/ScrollAnimatorExtension.svelte` — Studio extension: fixed toolbar pane with percentage display/input, keyframe list, jump, delete, and insert/save actions. Uses public `@threlte/studio/extensions` imports.
+- `src/lib/studio/scroll-animator/ScrollAnimatorExtension.svelte` — Studio extension: fixed toolbar pane with percentage display/input, keyframe list, jump, delete, and insert/save actions. Uses public `@threlte/studio/extensions` imports. Toolbar icon: `mdiAnimationOutline`.
 - `src/lib/studio/scroll-animator/scrollAnimatorRuntime.ts` — Shared runtime bridge: reactive percentage from ScrollTrigger, `jumpToPercentage` via trigger's measured range, attach/detach lifecycle.
 - `src/lib/studio/scroll-animator/transactionGuard.ts` — Suppresses source sync for ScrollAnimator transform attributes; only `keyframes` persists. Uses narrow structural types (no private imports).
+- `src/lib/studio/editor-camera/editorCameraControlsBridge.ts` — Future-facing, typed bridge for Studio editor CameraControls tuning. Currently unattached (no supported public path to the CameraControls instance). Documented in code.
 - `src/lib/spark/createSparkStudioRenderer.ts` — Factory for dual SparkRenderer setup.
 - `src/lib/spark/deviceProfile.ts` — Mobile/iOS detection + Spark performance profile.
 - `src/lib/spark/radUrl.ts` — RAD URL validation with typed results.
@@ -49,13 +50,17 @@ The `scrollAnimatorRuntime` singleton bridges the scene and extension:
 ## Camera / CameraTarget Hierarchy
 
 - Real `PerspectiveCamera` is a child of `Camera ScrollAnimator`.
+- The camera is registered as the default Threlte camera declaratively via `<T is={camera} makeDefault />`. No imperative `threlte.camera.set()` or `makeDefaultCameras.add()` calls.
 - Named `CameraTarget` (`Object3D`) is a child of `Camera Target ScrollAnimator`.
 - The real camera **always looks at CameraTarget's world position**, updated every frame via a Threlte `useTask` (not a renderer.render wrapper).
 - Camera animator rotation does not fight the target constraint — look-at wins for the camera's final viewing direction.
+- **Editor camera toggle**: Studio's built-in editor-camera extension can override the active camera. When disabled, Threlte restores the default camera (the nested `PerspectiveCamera`). When enabled, Studio's editor camera takes over. The `data-active` attribute on the camera debug element indicates whether the app camera is currently active.
 
 ## Studio Extension UI
 
-Registered via `<Studio extensions={[ScrollAnimatorExtension]}>`. Uses public `useObjectSelection` and `useTransactions` from `@threlte/studio/extensions`. Shows a `DropDownPane` (default toggle behavior) with:
+Registered via `<Studio extensions={[ScrollAnimatorExtension]}>`. Uses public `useObjectSelection` and `useTransactions` from `@threlte/studio/extensions`. Shows a `DropDownPane` with `icon="mdiAnimationOutline"` (default toggle behavior) with:
+
+- The `DropDownPane` title bar inside the tooltip is styled as a non-interactive heading via targeted CSS in `app.css` (`.scroll-animator-extension .tooltip .tp-rotv_b`). This removes the button-like appearance of the Tweakpane title row when `userExpandable={false}`.
 1. Live ScrollTrigger percentage from the shared runtime bridge.
 2. Numeric percentage input (0..100) — available in all modes; draft string not overwritten while focused; commits on Enter/blur with double-commit guard.
 3. Sorted keyframe list with clickable jump buttons (always) and delete buttons (source-sync only).
@@ -114,6 +119,25 @@ Visually hidden `<div class="camera-debug" data-testid="camera-state">` with:
 - `data-progress` — ScrollTrigger percentage
 - `data-x`, `data-y`, `data-z` — Camera **world** position
 - `data-target-x`, `data-target-y`, `data-target-z` — CameraTarget **world** position
+- `data-active` — `"true"` when the app `PerspectiveCamera` is the active Threlte camera (editor camera off), `"false"` otherwise
+
+## Studio Overlay Scroll-Safety
+
+Tweakpane's `.tp-dfwv` class (used by Studio's toolbar and other fixed panes) defaults to `position: absolute`, which causes panes to scroll with the document. A targeted rule in `app.css` overrides this to `position: fixed !important` for all `.tp-dfwv` elements. Inline panes nested inside `DropDownPane` do not carry `.tp-dfwv` at the top level, so they are unaffected.
+
+## Editor CameraControls Bridge
+
+`src/lib/studio/editor-camera/editorCameraControlsBridge.ts` defines a typed, dependency-free interface for tuning Studio editor CameraControls parameters (`smoothTime`, `draggingSmoothTime`, `dollyToCursor`). The bridge is **currently unattached** — `getCurrentControls()` always returns `null` — because Studio's `CameraControls.svelte` does not expose its `camera-controls` instance through a public API. Connecting it requires an upstream public hook or an owned editor-camera extension replacement. Unit tests cover the full attach/detach/tuning API.
+
+## Lightweight Authoring-Test RAD
+
+```
+https://avner.us/baby_yoda-lod.rad
+```
+
+This is the preferred lightweight RAD URL for manual Studio authoring verification (camera ownership, pane scrolling, toolbar interaction, parent/child transforms). It loads quickly and avoids GPU stalls that make Playwright automation unreliable with larger files. Use it for real-browser/manual testing of Studio features.
+
+The existing larger sample remains documented below for high-load/LOD testing.
 
 ## Source References
 
