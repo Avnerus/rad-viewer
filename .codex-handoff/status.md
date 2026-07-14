@@ -117,4 +117,6 @@ Not performed in this follow-up mission. The previous mission's manual verificat
 
 ## 10. Implementation Commit IDs and Branch
 
-Pending — to be committed and pushed after this status report is finalized. Branch: `main`.
+- `8842c36` — fix: ScrollAnimator lifecycle safety, public APIs, and authoring usability
+- Branch: `main`
+- Pushed to `github.com:Avnerus/rad-viewer`
