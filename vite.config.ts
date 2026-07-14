@@ -17,6 +17,15 @@ export default defineConfig({
     alias: {
       $lib: resolve(__dirname, 'src/lib'),
       ...(sparkStub ? { '@sparkjsdev/spark': sparkStub.replacement } : {}),
+      // Internal @threlte/studio modules not in the package exports map
+      '@threlte/studio/extensions/object-selection/useObjectSelection.svelte':
+        resolve(__dirname, 'node_modules/@threlte/studio/dist/extensions/object-selection/useObjectSelection.svelte.js'),
+      '@threlte/studio/extensions/transactions/useTransactions':
+        resolve(__dirname, 'node_modules/@threlte/studio/dist/extensions/transactions/useTransactions.js'),
+      '@threlte/studio/extensions/transactions/vitePluginEnabled':
+        resolve(__dirname, 'node_modules/@threlte/studio/dist/extensions/transactions/vitePluginEnabled.js'),
+      '@threlte/studio/internal/getThrelteStudioUserData':
+        resolve(__dirname, 'node_modules/@threlte/studio/dist/internal/getThrelteStudioUserData.js'),
     },
   },
   test: {

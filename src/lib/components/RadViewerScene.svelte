@@ -1,21 +1,11 @@
 <script lang="ts">
   import { T, useThrelte, useCamera } from '@threlte/core'
   import { onMount, onDestroy } from 'svelte'
-  import { PerspectiveCamera } from 'three'
+  import { PerspectiveCamera, Object3D, Vector3 } from 'three'
   import { ScrollTrigger } from 'gsap/ScrollTrigger'
   import { gsap } from 'gsap'
-  import { getCameraPose, applyCameraPose, defaultPerspectivePose, defaultTopDownPose } from '$lib/spark/cameraTween'
-  import {
-    applyMovement,
-    applyLook,
-    updateLookAngles,
-    applyZoom,
-    extractYawPitch,
-    computeMoveDirection,
-    shouldHandleKeyEvent,
-    isNavKey,
-    DEFAULT_FREE_NAV_CONFIG,
-  } from '$lib/spark/freeNavigation'
+  import { ScrollAnimator } from '$lib/spark/ScrollAnimator'
+  import type { ScrollKeyframe } from '$lib/spark/scrollAnimation'
   import type { DeviceProfile } from '$lib/types'
   import SparkSplats from './SparkSplats.svelte'
   import SparkStudioBridge from './SparkStudioBridge.svelte'
@@ -23,73 +13,79 @@
   interface Props {
     url: string
     profile: DeviceProfile
-    freeNavEnabled: boolean
     onReady?: () => void
   }
 
-  let { url, profile, freeNavEnabled: initialFreeNav, onReady }: Props = $props()
-  let scrollTrigger: { kill(): void } | null = null
-  let loaded = $state(false)
+  let { url, profile, onReady }: Props = $props()
 
-  // Camera debug state for e2e tests
+  // Camera debug state for e2e tests (world-space)
   let cameraProgress = $state(0)
-  let cameraPosition = $state<[number, number, number]>([...defaultPerspectivePose.position])
-  let cameraYaw = $state(0)
-  let cameraPitch = $state(0)
-  let cameraZoom = $state(60) // default FOV
-  const fixedTarget: [number, number, number] = [...defaultPerspectivePose.target]
+  let cameraWorldX = $state(0)
+  let cameraWorldY = $state(0)
+  let cameraWorldZ = $state(0)
+  let targetWorldX = $state(0)
+  let targetWorldY = $state(0)
+  let targetWorldZ = $state(0)
+
+  let loaded = $state(false)
+  let scrollTrigger: ReturnType<typeof ScrollTrigger.create> | null = null
 
   const threlte = useThrelte()
   const cameraContext = useCamera()
 
-  // Create the camera
+  // Real camera
   const camera = new PerspectiveCamera(60, 1, 0.1, 10_000)
-  camera.position.set(
-    defaultPerspectivePose.position[0],
-    defaultPerspectivePose.position[1],
-    defaultPerspectivePose.position[2],
-  )
-  camera.lookAt(
-    defaultPerspectivePose.target[0],
-    defaultPerspectivePose.target[1],
-    defaultPerspectivePose.target[2],
-  )
 
-  // Free navigation state
-  let navYaw = $state(0)
-  let navPitch = $state(0)
-  let pressedKeys = new Set<string>()
-  let lastMouseX = $state(0)
-  let lastMouseY = $state(0)
-  let lastTime = $state(0)
-  let rafId: number | null = null
+  // CameraTarget — an Object3D that the camera always looks at (world position)
+  const cameraTarget = new Object3D()
+  cameraTarget.name = 'CameraTarget'
 
-  // Track whether we are actively in free nav mode internally
-  let freeNavActive = $state(false)
+  // ScrollAnimators
+  const cameraAnimator = new ScrollAnimator()
+  cameraAnimator.name = 'Camera ScrollAnimator'
+  cameraAnimator.keyframes = [
+    { scroll: 0, position: [0, 0, -1], rotation: [0, 0, 0] },
+    { scroll: 100, position: [0, 30, -1], rotation: [0, 0, 0] },
+  ] as ScrollKeyframe[]
 
-  // Store the last scroll-driven pose so we can restore it when exiting free nav
-  let lastScrollPose: { position: [number, number, number]; target: [number, number, number] } | null = null
+  const targetAnimator = new ScrollAnimator()
+  targetAnimator.name = 'Camera Target ScrollAnimator'
+  targetAnimator.keyframes = [
+    { scroll: 0, position: [0, 0, 0], rotation: [0, 0, 0] },
+  ] as ScrollKeyframe[]
 
-  $effect(() => {
-    // React to external freeNavEnabled changes
-    if (initialFreeNav && !freeNavActive) {
-      // Entering free nav
-      freeNavActive = true
-      ;[navYaw, navPitch] = extractYawPitch(camera)
-      cameraYaw = navYaw
-      cameraPitch = navPitch
-      cameraZoom = camera.fov
-      if (scrollTrigger) {
-        scrollTrigger.kill()
-        scrollTrigger = null
-      }
-    } else if (!initialFreeNav && freeNavActive) {
-      // Exiting free nav
-      freeNavActive = false
-      restoreScrollPose()
-      recreateScrollTrigger()
-    }
-  })
+  // Apply initial poses
+  cameraAnimator.applyScrollPercentage(0)
+  targetAnimator.applyScrollPercentage(0)
+
+  // ScrollTrigger update handler
+  function applyScrollAnimators(percent: number): void {
+    cameraAnimator.applyScrollPercentage(percent)
+    targetAnimator.applyScrollPercentage(percent)
+    cameraProgress = percent
+    updateDebugState()
+  }
+
+  // Update camera look-at target and debug state
+  function updateCameraLookAt(): void {
+    const targetWorld = new Vector3()
+    cameraTarget.getWorldPosition(targetWorld)
+    camera.lookAt(targetWorld)
+  }
+
+  function updateDebugState(): void {
+    const camWorld = new Vector3()
+    camera.getWorldPosition(camWorld)
+    cameraWorldX = camWorld.x
+    cameraWorldY = camWorld.y
+    cameraWorldZ = camWorld.z
+
+    const targetWorld = new Vector3()
+    cameraTarget.getWorldPosition(targetWorld)
+    targetWorldX = targetWorld.x
+    targetWorldY = targetWorld.y
+    targetWorldZ = targetWorld.z
+  }
 
   onMount(() => {
     if (typeof window === 'undefined') return
@@ -101,28 +97,38 @@
     // Register GSAP ScrollTrigger
     gsap.registerPlugin(ScrollTrigger)
 
-    // Use the .scroll-spacer element (in document flow) as the trigger.
-    // It provides the scroll height (400vh) while the canvas stays fixed.
+    // Use the .scroll-spacer element as the trigger
     const spacer = document.querySelector<HTMLElement>('.scroll-spacer')
     if (!spacer) return
 
-    scrollTrigger = createScrollTrigger()
+    scrollTrigger = ScrollTrigger.create({
+      trigger: spacer,
+      start: 'top top',
+      end: 'bottom bottom',
+      scrub: true,
+      onUpdate: (self) => {
+        const percent = self.progress * 100
+        applyScrollAnimators(percent)
+      },
+    })
 
-    // Keyboard event listeners
-    window.addEventListener('keydown', handleKeyDown)
-    window.addEventListener('keyup', handleKeyUp)
+    // Apply initial pose from the current ScrollTrigger progress
+    if (scrollTrigger) {
+      applyScrollAnimators(scrollTrigger.progress * 100)
+    }
 
-    // Mouse move listener on the document (works when canvas is focused)
-    document.addEventListener('mousemove', handleMouseMove)
+    // Render task: update camera look-at target every frame
+    // We wrap the WebGLRenderer.render to inject look-at before each frame
+    const { renderer } = threlte
+    if (renderer) {
+      const originalRender = renderer.render.bind(renderer)
+      renderer.render = function (scene: Parameters<typeof originalRender>[0], cam: Parameters<typeof originalRender>[1]) {
+        updateCameraLookAt()
+        return originalRender(scene, cam)
+      }
+    }
 
-    // Mouse wheel listener for zoom in free nav mode
-    document.addEventListener('wheel', handleWheel, { passive: false })
-
-    // Start the free-navigation render loop
-    lastTime = performance.now()
-    rafId = requestAnimationFrame(freeNavLoop)
-
-    // Mark as loaded once the scene is mounted
+    // Mark as loaded
     loaded = true
     onReady?.()
   })
@@ -132,143 +138,31 @@
       scrollTrigger.kill()
       scrollTrigger = null
     }
-    window.removeEventListener('keydown', handleKeyDown)
-    window.removeEventListener('keyup', handleKeyUp)
-    document.removeEventListener('mousemove', handleMouseMove)
-    document.removeEventListener('wheel', handleWheel)
-    if (rafId !== null) {
-      cancelAnimationFrame(rafId)
-    }
   })
-
-  function createScrollTrigger() {
-    const spacer = document.querySelector<HTMLElement>('.scroll-spacer')
-    if (!spacer) return null
-
-    return ScrollTrigger.create({
-      trigger: spacer,
-      start: 'top top',
-      end: 'bottom bottom',
-      scrub: true,
-      onUpdate: (self) => {
-        cameraProgress = self.progress
-        const pose = getCameraPose(self.progress, defaultPerspectivePose, defaultTopDownPose)
-        cameraPosition = [...pose.position]
-        lastScrollPose = { position: [...pose.position], target: [...pose.target] }
-
-        if (!freeNavActive) {
-          applyCameraPose(camera, pose)
-        }
-      },
-    })
-  }
-
-  function restoreScrollPose() {
-    if (lastScrollPose) {
-      applyCameraPose(camera, lastScrollPose)
-    } else {
-      applyCameraPose(camera, defaultPerspectivePose)
-    }
-    // Reset FOV to default on exit
-    camera.fov = 60
-    camera.updateProjectionMatrix()
-  }
-
-  function recreateScrollTrigger() {
-    if (typeof window === 'undefined') return
-    scrollTrigger = createScrollTrigger()
-  }
-
-  function handleKeyDown(e: KeyboardEvent) {
-    if (!freeNavActive || !shouldHandleKeyEvent(e) || !isNavKey(e.key)) return
-    e.preventDefault()
-    pressedKeys.add(e.key.toLowerCase())
-  }
-
-  function handleKeyUp(e: KeyboardEvent) {
-    if (!isNavKey(e.key)) return
-    pressedKeys.delete(e.key.toLowerCase())
-  }
-
-  function handleMouseMove(e: MouseEvent) {
-    if (!freeNavActive) return
-
-    const dx = e.clientX - lastMouseX
-    const dy = e.clientY - lastMouseY
-    lastMouseX = e.clientX
-    lastMouseY = e.clientY
-
-    if (dx === 0 && dy === 0) return
-
-    const deltaYaw = -dx * DEFAULT_FREE_NAV_CONFIG.mouseSensitivity
-    const deltaPitch = -dy * DEFAULT_FREE_NAV_CONFIG.mouseSensitivity
-
-    // Update cumulative yaw and pitch using the new pure-math helper
-    ;[navYaw, navPitch] = updateLookAngles(
-      navYaw,
-      navPitch,
-      deltaYaw,
-      deltaPitch,
-      DEFAULT_FREE_NAV_CONFIG.minPitch,
-      DEFAULT_FREE_NAV_CONFIG.maxPitch,
-    )
-
-    // Apply absolute yaw/pitch to the camera
-    applyLook(camera, navYaw, navPitch)
-
-    // Update debug state
-    cameraYaw = navYaw
-    cameraPitch = navPitch
-  }
-
-  function handleWheel(e: WheelEvent) {
-    if (!freeNavActive) return
-    e.preventDefault()
-
-    const newFov = applyZoom(
-      camera,
-      e.deltaY,
-      DEFAULT_FREE_NAV_CONFIG.zoomSensitivity,
-      DEFAULT_FREE_NAV_CONFIG.minFov,
-      DEFAULT_FREE_NAV_CONFIG.maxFov,
-    )
-    cameraZoom = newFov
-  }
-
-  function freeNavLoop(time: number) {
-    rafId = requestAnimationFrame(freeNavLoop)
-
-    if (!freeNavActive) return
-
-    const delta = (time - lastTime) / 1000
-    lastTime = time
-
-    if (delta <= 0 || delta > 0.5) return // skip huge gaps
-
-    const direction = computeMoveDirection(pressedKeys)
-    if (direction[0] !== 0 || direction[2] !== 0) {
-      applyMovement(
-        camera,
-        direction,
-        navYaw,
-        delta,
-        DEFAULT_FREE_NAV_CONFIG.moveSpeed,
-      )
-    }
-
-    // Update debug state
-    cameraPosition = [
-      camera.position.x,
-      camera.position.y,
-      camera.position.z,
-    ]
-  }
 </script>
 
-
+<!-- Camera ScrollAnimator with real camera as child -->
 <T
-  is={camera}
-/>
+  is={cameraAnimator}
+  name="Camera ScrollAnimator"
+  keyframes={[
+    { scroll: 0, position: [0, 0, -1], rotation: [0, 0, 0] },
+    { scroll: 100, position: [0, 30, -1], rotation: [0, 0, 0] },
+  ]}
+>
+  <T is={camera} name="PerspectiveCamera" />
+</T>
+
+<!-- Camera Target ScrollAnimator with CameraTarget as child -->
+<T
+  is={targetAnimator}
+  name="Camera Target ScrollAnimator"
+  keyframes={[
+    { scroll: 0, position: [0, 0, 0], rotation: [0, 0, 0] },
+  ]}
+>
+  <T is={cameraTarget} name="CameraTarget" />
+</T>
 
 <SparkStudioBridge {profile} />
 
@@ -282,14 +176,12 @@
   class="camera-debug"
   data-testid="camera-state"
   data-progress={cameraProgress.toFixed(3)}
-  data-x={cameraPosition[0].toFixed(3)}
-  data-y={cameraPosition[1].toFixed(3)}
-  data-z={cameraPosition[2].toFixed(3)}
-  data-target={fixedTarget.join(',')}
-  data-freenav={freeNavActive ? 'true' : 'false'}
-  data-yaw={cameraYaw.toFixed(4)}
-  data-pitch={cameraPitch.toFixed(4)}
-  data-zoom={cameraZoom.toFixed(2)}
+  data-x={cameraWorldX.toFixed(3)}
+  data-y={cameraWorldY.toFixed(3)}
+  data-z={cameraWorldZ.toFixed(3)}
+  data-target-x={targetWorldX.toFixed(3)}
+  data-target-y={targetWorldY.toFixed(3)}
+  data-target-z={targetWorldZ.toFixed(3)}
   aria-hidden="true"
 ></div>
 

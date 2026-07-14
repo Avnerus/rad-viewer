@@ -11,12 +11,6 @@ export interface ErrorResult {
   error: string
 }
 
-/** Camera pose for scroll-driven tweening */
-export interface CameraPose {
-  position: [number, number, number]
-  target: [number, number, number]
-}
-
 /** Spark renderer performance profile options */
 export interface SparkRendererOptions {
   lodSplatScale: number
