@@ -1,13 +1,12 @@
-# Follow-up Mission: Correct Spark Studio camera routing
+# Follow-up Mission: Pin editor Spark override inside `onBeforeRender`
 
 ## Objective
 
-Fix the dual-`SparkRenderer` routing introduced in commit `2340703` (status report names inner implementation commit `b645578`). The current implementation reverses the feature's primary invariant:
+Keep Pi's crash-safe `editorRenderer.onBeforeRender` interception, but close the remaining LOD-safety gap in commit `2c3be49`.
 
-- Editor-camera path currently sets `SparkRenderer.sparkOverride = realRenderer`, so the LOD-driving renderer is updated with the Studio editor camera.
-- Real/default-camera path currently applies no override, so the only `SparkRenderer` in the scene, `editorRenderer`, handles the render and does not drive LOD.
+The current editor-camera branch calls the original Spark `onBeforeRender` without changing `SparkRenderer.sparkOverride`. Spark resolves `const spark = SparkRenderer.sparkOverride ?? this`; therefore, if any pre-existing override is present, an editor-camera render uses that foreign/driving renderer rather than the non-driving editor renderer. The existing test named `preserves pre-existing sparkOverride for editor camera` only checks the value after the call and does not observe which renderer Spark would use inside it.
 
-After the fix, Studio editor cameras must render through `editorRenderer` (`enableDriveLod: false`), while every real/default-camera render must render through `realRenderer` (`enableDriveLod: true`).
+During every editor-camera `onBeforeRender`, explicitly set `SparkRenderer.sparkOverride = editorRenderer`, call the original callback, and restore the previous override in `finally`. This is scoped only to the Spark object's callback and must not reintroduce the removed full-`WebGLRenderer.render` override.
 
 ## Files likely involved
 
@@ -16,55 +15,58 @@ After the fix, Studio editor cameras must render through `editorRenderer` (`enab
 - `AGENTS.md`
 - `.codex-handoff/status.md`
 
-Do not broaden the change unless a directly related compile/test failure requires it.
-
 ## Constraints
 
-- Keep only `editorRenderer` attached to the Three scene.
-- Keep copying `realRenderer.lodInstances` into `editorRenderer.lodInstances` before an editor-camera render.
-- For an editor camera (`camera.userData.editorCamera === true`), set the override to `editorRenderer` for the duration of the raw Three render.
-- For a real/default camera, set the override to `realRenderer` for the duration of the raw Three render. Do not pass through without an override.
-- Use the same helper or equivalent `try/finally` logic on both paths. Preserve and restore any pre-existing `SparkRenderer.sparkOverride` value after success or failure.
-- Preserve the bound/original raw Three render call without recursion.
-- Do not change Studio wiring, device-profile values, SplatMesh ownership, scroll/free-navigation behavior, layout, dependencies, or renderer count.
-- Do not create, edit, or run end-to-end tests. The user owns end-to-end verification.
-- Remove or correct inaccurate comments/docs that currently say editor rendering uses `realRenderer` or real rendering passes through directly.
+- Retain the `onBeforeRender` wrapping architecture that fixed the browser crash.
+- Do not override or monkey-patch `WebGLRenderer.render` again.
+- Keep only `editorRenderer` in the scene; `realRenderer` remains off-scene.
+- Editor camera: share real LOD instances, temporarily set override to `editorRenderer` (`enableDriveLod: false`), invoke original `onBeforeRender`, restore the prior override.
+- Real/default camera: temporarily set override to `realRenderer` (`enableDriveLod: true`), invoke original `onBeforeRender`, restore the prior override, share LOD instances.
+- Prefer one small helper for the identical save/set/call/restore logic in both branches.
+- Preserve the previous override on success and exception, including when it is a non-undefined foreign `SparkRenderer`.
+- Do not change renderer options, Studio wiring, scene ownership, device profiles, SplatMesh behavior, camera/navigation behavior, layout, or dependencies.
+- Do not create or modify automated end-to-end tests. Manual Playwright CLI verification is required because this feature previously crashed only in the real browser.
 
-Critical intended routing:
+Critical behavior:
 
 ```ts
+const callWithOverride = (spark: SparkRenderer) => {
+  const previous = SparkRenderer.sparkOverride
+  try {
+    SparkRenderer.sparkOverride = spark
+    originalOnBeforeRender(renderer, scene, camera)
+  } finally {
+    SparkRenderer.sparkOverride = previous
+  }
+}
+
 if (camera.userData.editorCamera === true) {
   shareLodInstances()
-  renderWithSparkOverride(editorRenderer, scene, camera)
+  callWithOverride(editorRenderer)
 } else {
-  renderWithSparkOverride(realRenderer, scene, camera)
+  callWithOverride(realRenderer)
   shareLodInstances()
 }
 ```
 
-Refine the exact post-real-render sharing timing only if justified by the installed Spark implementation, but the active override identities above are mandatory.
-
 ## Acceptance criteria
 
-- During the raw render for a Studio editor camera, `SparkRenderer.sparkOverride` is exactly `editorRenderer` and its `enableDriveLod` is `false`.
-- During the raw render for a real/default camera, `SparkRenderer.sparkOverride` is exactly `realRenderer` and its `enableDriveLod` is `true`.
-- Editor-camera rendering cannot drive Spark LOD selection, fetching, or pager updates.
-- Real/default-camera rendering remains the sole LOD driver.
-- Editor rendering consumes the real renderer's current `lodInstances` and retains its own editor-camera sort/view.
-- Both camera paths restore the prior override after successful raw rendering and after a raw-render exception.
-- Unit tests observe `SparkRenderer.sparkOverride` *inside the raw render mock*, not merely after it has been restored. Tests explicitly assert renderer identity for both camera paths.
-- Unit tests include error-path restoration for both editor and real/default cameras, or a parameterized equivalent proving both branches.
-- Existing focused lifecycle, profile-option, LOD-sharing, and disposal tests remain green.
-- `AGENTS.md` accurately describes editor override = editor renderer and real/default override = driving renderer.
-- The status report acknowledges the routing defect found in Codex verification and accurately describes the correction.
-- `npm run test:unit`, `npm run check`, `npm run lint`, and `npm run build` pass.
-- No end-to-end test is created, modified, or run.
+- Inside the original `onBeforeRender` callback for an editor camera, `SparkRenderer.sparkOverride` is exactly `editorRenderer` and `enableDriveLod === false`, even when the prior override was `realRenderer` or another non-undefined value.
+- Inside the original callback for a real/default camera, the override remains exactly `realRenderer` with `enableDriveLod === true`.
+- Both branches restore the exact prior override after success and after an exception.
+- Editor cameras cannot inherit a driving/foreign Spark override and therefore cannot drive LOD.
+- The implementation still wraps only `editorRenderer.onBeforeRender`; `WebGLRenderer.render` is untouched.
+- Unit tests observe override identity *inside* the mocked original callback for both camera branches with a non-undefined prior override.
+- Unit tests cover exception restoration for both branches.
+- Existing unit tests, check, lint, and build pass.
+- Manual Playwright CLI verification loads the real sample RAD model, activates the Studio editor camera, shows the Studio UI and model without a crash, and reports zero console errors.
+- Save a screenshot under `.playwright-cli/` and include its path plus the observed model/editor state in the status report. Do not commit the screenshot unless this repository already tracks such artifacts.
+- No automated E2E test is created, modified, or run.
+- `AGENTS.md` accurately states that both camera paths pin their intended Spark override only during the wrapped `onBeforeRender` callback.
 
 Re-check every acceptance criterion before finalizing.
 
 ## Tests to run
-
-Run only:
 
 ```sh
 npm run test:unit
@@ -73,28 +75,28 @@ npm run lint
 npm run build
 ```
 
-Create/update unit tests for both routing identities and both restoration paths. Do not create, modify, or run Playwright/end-to-end tests.
+Then use `playwright-cli` against the real dev app as documented in `AGENTS.md`: load the sample model, wait for streaming, activate Studio's editor camera, inspect console errors, and take a screenshot showing the editor and loaded model. This is manual browser verification, not a new automated E2E test.
 
 ## Things Pi must not change
 
-- Do not change `src/App.svelte`, `SparkStudioBridge.svelte`, `SparkSplats.svelte`, `RadViewerScene.svelte`, `vite.config.ts`, camera tween/free-navigation modules, or E2E fixtures/tests unless a directly related compiler error makes a minimal change unavoidable.
-- Do not add or upgrade dependencies.
-- Do not change renderer count or attach `realRenderer` to the scene.
-- Do not weaken tests to assert only the final restored override.
-- Do not alter unrelated tests, documentation, formatting, or user work.
+- Do not restore the full `renderer.render` override.
+- Do not change `src/App.svelte`, `SparkStudioBridge.svelte`, `SparkSplats.svelte`, `RadViewerScene.svelte`, Vite config, E2E tests/fixtures, camera modules, or styles unless a directly related compiler error requires a minimal correction.
+- Do not add dependencies or a third Spark renderer.
+- Do not weaken tests to inspect only the post-callback restored value.
+- Do not commit screenshots, server logs, build output, or unrelated formatting changes.
 
-Update `AGENTS.md` with concise, correct current behavior and source references; it should not become an implementation log.
+Update `AGENTS.md` with concise, correct current behavior and relevant source references. Do not add a full implementation log.
 
 ## Expected completion report format
 
 Write `.codex-handoff/status.md` with:
 
-1. `## Summary` - defect and corrected routing.
+1. `## Summary` - remaining override-inheritance defect and correction.
 2. `## Files changed` - file and purpose.
-3. `## Acceptance criteria` - checklist with evidence.
-4. `## Unit tests` - exact in-render identity and error restoration coverage.
-5. `## Verification` - commands and results; explicitly state E2E was not run.
+3. `## Acceptance criteria` - checklist with code/test/browser evidence.
+4. `## Unit tests` - in-callback identity and exception restoration coverage.
+5. `## Verification` - exact commands/results, Playwright CLI steps, console result, screenshot path, and explicit statement that automated E2E was not run.
 6. `## Risks or follow-ups` - remaining concerns or `None`.
 7. `## Commit` - pushed commit identifier.
 
-Write `status.md` as the last file modification before committing and pushing. Before writing it, re-check all acceptance criteria. Commit and push the current branch. After pushing, perform no further verification or modification.
+Place the report at `.codex-handoff/status.md` and push it to the current branch. Write `status.md` as the last file modification before committing and pushing. Before writing it, re-check every acceptance criterion. After pushing, perform no further verification or modification.
