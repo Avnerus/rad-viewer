@@ -204,4 +204,113 @@ test.describe('RAD Viewer', () => {
     // Second keyframe should be at 100%
     await expect(keyframeRows.nth(1)).toContainText('100.00%')
   })
+
+  test('extension shows source-sync-unavailable state in production preview', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(1000)
+
+    // Select the camera animator
+    const hierarchyItem = page.getByText('Camera ScrollAnimator')
+    await expect(hierarchyItem).toBeVisible({ timeout: 10_000 })
+    await hierarchyItem.click()
+    await page.waitForTimeout(500)
+
+    // Open the extension pane
+    await page.evaluate(() => {
+      const tooltips = document.querySelectorAll('.tooltip')
+      for (const tooltip of tooltips) {
+        if (tooltip.querySelector('.sa-animator-name')) {
+          tooltip.style.display = 'block'
+          break
+        }
+      }
+    })
+    await page.waitForTimeout(200)
+
+    // In preview mode the Vite plugin is not active, so source sync is unavailable.
+    // The extension should show a warning message.
+    const warning = page.locator('.sa-warning')
+    await expect(warning).toBeVisible({ timeout: 5000 })
+    await expect(warning).toContainText('Studio source sync unavailable')
+
+    // Insert and delete controls should not be present
+    const insertBtn = page.locator('.sa-insert-btn')
+    await expect(insertBtn).not.toBeVisible()
+
+    const deleteBtns = page.locator('.sa-kf-delete')
+    expect(await deleteBtns.count()).toBe(0)
+  })
+
+  test('clicking a keyframe percentage jumps scroll and updates camera', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(1000)
+
+    // Select the camera animator
+    const hierarchyItem = page.getByText('Camera ScrollAnimator')
+    await expect(hierarchyItem).toBeVisible({ timeout: 10_000 })
+    await hierarchyItem.click()
+    await page.waitForTimeout(500)
+
+    // Open the extension pane
+    await page.evaluate(() => {
+      const tooltips = document.querySelectorAll('.tooltip')
+      for (const tooltip of tooltips) {
+        if (tooltip.querySelector('.sa-animator-name')) {
+          tooltip.style.display = 'block'
+          break
+        }
+      }
+    })
+    await page.waitForTimeout(200)
+
+    // Camera should start near perspective pose (y ≈ 0)
+    const initial = await getCameraState(page)
+    expect(initial.y).toBeCloseTo(0, 0)
+
+    // Click the second keyframe button (100%) to jump to top-down.
+    // Use evaluate to click the button directly to avoid strict-mode issues
+    // with text matching (100.00% contains 0.00%).
+    await page.evaluate(() => {
+      const rows = document.querySelectorAll('.sa-kf-row')
+      // The 100% keyframe is the last row
+      const lastRow = rows[rows.length - 1]
+      const pctBtn = lastRow?.querySelector('.sa-kf-pct')
+      if (pctBtn) pctBtn.click()
+    })
+    await page.waitForTimeout(800)
+
+    // Camera should have moved toward top-down pose (y ≈ 30)
+    const afterJump = await getCameraState(page)
+    expect(afterJump.y).toBeGreaterThan(25)
+    expect(afterJump.progress).toBeGreaterThan(95)
+  })
+
+  test('selecting non-ScrollAnimator shows disabled state', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(1000)
+
+    // Select the SplatMesh (not a ScrollAnimator) by clicking it in the hierarchy
+    const meshItem = page.getByText('📐')
+    if (await meshItem.isVisible({ timeout: 5000 })) {
+      await meshItem.click()
+      await page.waitForTimeout(500)
+    }
+
+    // Open the extension pane
+    await page.evaluate(() => {
+      const tooltips = document.querySelectorAll('.tooltip')
+      for (const tooltip of tooltips) {
+        if (tooltip.querySelector('.sa-no-selection')) {
+          tooltip.style.display = 'block'
+          break
+        }
+      }
+    })
+    await page.waitForTimeout(200)
+
+    // The extension should show the "Select one ScrollAnimator" message
+    const noSelection = page.locator('.sa-no-selection')
+    await expect(noSelection).toBeVisible({ timeout: 5000 })
+    await expect(noSelection).toContainText('Select one ScrollAnimator')
+  })
 })
