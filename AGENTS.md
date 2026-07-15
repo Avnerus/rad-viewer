@@ -135,7 +135,14 @@ Tweakpane's `.tp-dfwv` class (used by Studio's toolbar and other fixed panes) de
 https://avner.us/baby_yoda-lod.rad
 ```
 
-This is the preferred lightweight RAD URL for manual Studio authoring verification (camera ownership, pane scrolling, toolbar interaction, parent/child transforms). It loads quickly and avoids GPU stalls that make Playwright automation unreliable with larger files. Use it for real-browser/manual testing of Studio features.
+Preferred for manual Studio authoring verification. Loads quickly, renders a small Baby Yoda splat at the origin, and avoids GPU stalls that make automation unreliable with larger files. Scroll 0% shows a close-up view; scroll 100% shows a top-down grid view from y=30.
+
+Quick manual check with `playwright-cli`:
+1. `playwright-cli open http://localhost:5173/` (after `npm run dev`)
+2. Fill the URL input with the lightweight RAD URL, click Start
+3. `playwright-cli screenshot` — confirms Baby Yoda renders at scroll 0%
+4. `playwright-cli eval "window.scrollTo(0, document.body.scrollHeight)"` then `playwright-cli screenshot` — confirms top-down grid view at scroll 100%
+5. Toggle Editor Camera button, check `data-active` attribute, toggle back — confirms camera ownership round-trip
 
 The existing larger sample remains documented below for high-load/LOD testing.
 
@@ -155,6 +162,8 @@ https://storage.googleapis.com/forge-dev-public/asundqui/rad/260217/cozy-spacesh
 ## E2E Testing
 
 `npm run test:e2e` builds with `VITE_E2E_STUB_SPARK=true`. Studio UI elements are rendered inside the WebGL canvas overlay, so Playwright actionability checks can fail. Tests use targeted `page.evaluate()` for pane toggle clicks when necessary, while verifying visible content through standard locators.
+
+For real-splat visual verification, use `playwright-cli screenshot` with the lightweight RAD URL (see above). Screenshots capture the compositor output correctly even when `readPixels()` returns black in headless mode.
 
 ## CORS Note
 

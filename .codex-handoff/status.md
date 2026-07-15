@@ -143,9 +143,17 @@ Interactive browser session with `https://avner.us/baby_yoda-lod.rad` on the liv
 
 App camera remained active (`"true"`) throughout.
 
-### 8.7 Splat rendering (headless limitation)
+### 8.7 Splat rendering — verified via screenshots
 
-All 2304 sampled pixels across the full viewport were `#000000` (black). The RAD file loaded without CORS or network errors (2 `.rad` resources fetched). The black canvas is a **headless Chromium GPU limitation** — Spark's WebGL splat rendering produces no visible output in headless mode. This is consistent with the mission brief's note that "browser automation timeouts are not evidence of correctness" and the lightweight RAD is intended for real-browser manual testing. The camera position data confirms the render pipeline is functioning correctly even though the splat content is invisible in headless mode.
+`readPixels()` returned all-black pixels (headless framebuffer limitation), but **`playwright-cli screenshot` captures the compositor output correctly** and confirms the splat renders.
+
+| Scroll | Camera position | Visual evidence |
+|--------|----------------|------------------|
+| 0% | (0, 0, -1) | Baby Yoda splat visible at center, close-up view. Robe, green hand clearly rendered. |
+| 100% | (0, 30, -1) | Top-down view. Grid helper visible. Baby Yoda reduced to a tiny object at origin. |
+| 0% (return) | (0, 0, -1) | Identical to initial scroll-0% screenshot — round-trip confirmed. |
+
+The scroll-driven camera animation drives the real view correctly. The splat content renders and responds to camera position changes.
 
 ## 9. Acceptance Criteria Audit
 
