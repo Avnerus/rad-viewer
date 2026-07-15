@@ -109,10 +109,10 @@ async function captureOverlayRects(page: import('@playwright/test').Page) {
   })
 }
 
-test.describe('RAD Viewer', () => {
+test.describe('RAD Story', () => {
   test('landing screen shows URL input and start button', async ({ page }) => {
     await page.goto('/')
-    await expect(page.getByRole('heading', { name: 'RAD Viewer' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'RAD Story' })).toBeVisible()
     await expect(page.getByLabel('RAD file URL')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Start' })).toBeVisible()
   })
@@ -150,7 +150,7 @@ test.describe('RAD Viewer', () => {
     await expect(page.getByRole('button', { name: 'Go back' })).toBeVisible({ timeout: 15_000 })
     await page.getByRole('button', { name: 'Go back' }).click()
     await page.waitForTimeout(1000)
-    await expect(page.getByRole('heading', { name: 'RAD Viewer' })).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByRole('heading', { name: 'RAD Story' })).toBeVisible({ timeout: 10_000 })
     await expect(page.getByLabel('RAD file URL')).toBeVisible({ timeout: 10_000 })
   })
 
@@ -292,7 +292,7 @@ test.describe('RAD Viewer', () => {
 
     await page.getByRole('button', { name: 'Go back' }).click()
     await page.waitForTimeout(1000)
-    await expect(page.getByRole('heading', { name: 'RAD Viewer' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'RAD Story' })).toBeVisible()
 
     const input = page.getByLabel('RAD file URL')
     await input.fill(SAMPLE_URL)
@@ -616,7 +616,7 @@ test.describe('RAD Viewer', () => {
     // Remount viewer
     await page.getByRole('button', { name: 'Go back' }).click()
     await page.waitForTimeout(1000)
-    await expect(page.getByRole('heading', { name: 'RAD Viewer' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'RAD Story' })).toBeVisible()
 
     const input = page.getByLabel('RAD file URL')
     await input.fill(SAMPLE_URL)

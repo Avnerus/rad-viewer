@@ -5,7 +5,7 @@
   import { WebGLRenderer } from 'three'
   import { validateRadUrl } from '$lib/spark/radUrl'
   import { getDeviceProfile } from '$lib/spark/deviceProfile'
-  import RadViewerScene from '$lib/components/RadViewerScene.svelte'
+  import RadStoryScene from '$lib/components/RadStoryScene.svelte'
   import ScrollAnimatorExtension from '$lib/studio/scroll-animator/ScrollAnimatorExtension.svelte'
   import type { DeviceProfile } from '$lib/types'
 
@@ -66,9 +66,9 @@
 
 {#if appState === 'landing'}
   <div class="landing">
-    <h1>RAD Viewer</h1>
+    <h1>RAD Story</h1>
     <p>
-      View Spark 2.x streaming LOD Gaussian splats from a RAD file URL.
+      Design scroll-based stories over RAD scans.
       Paste a <code>.rad</code> URL below and click Start.
     </p>
 
@@ -108,7 +108,7 @@
       }
     >
       <Studio extensions={[ScrollAnimatorExtension]}>
-        <RadViewerScene
+        <RadStoryScene
           url={activeUrl}
           {profile}
           onReady={handleReady}

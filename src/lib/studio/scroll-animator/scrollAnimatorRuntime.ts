@@ -1,5 +1,5 @@
 /**
- * Shared runtime bridge between RadViewerScene (ScrollTrigger owner) and
+ * Shared runtime bridge between RadStoryScene (ScrollTrigger owner) and
  * the ScrollAnimator Studio extension.
  *
  * Provides:

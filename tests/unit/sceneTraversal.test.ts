@@ -36,7 +36,7 @@ describe('scene-wide ScrollAnimator traversal', () => {
     scene.add(animator2)
     scene.add(ordinary)
 
-    // Simulate the scene.traverse pattern used in RadViewerScene
+    // Simulate the scene.traverse pattern used in RadStoryScene
     scene.traverse((object) => {
       if (isScrollAnimator(object)) {
         ;(object as Record<string, (p: number) => void>).applyScrollPercentage(50)
