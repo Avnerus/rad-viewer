@@ -1,140 +1,119 @@
-# Follow-up Mission: Correct Verification Gaps and Finalize the Studio Repair
+# Final Follow-up Mission: Close Overlay Test and Reporting Gaps
 
 ## Objective
 
-Keep the successful declarative camera fix, fixed-pane CSS behavior, toolbar icon, and the user's post-report SparkSplats simplification. Correct the remaining implementation/documentation mismatches and produce a genuinely final, current status report.
+Preserve the now-correct production implementation and close the remaining verification defects. This mission is primarily tests and documentation: make the fixed-overlay regression incapable of false positives, individually verify every requested Studio pane/dropdown, distinguish native pointer evidence from synthetic events, and produce a final status report that is actually the last repository action.
 
-This pass is narrowly scoped. Do not redesign ScrollAnimator or undo the user's commit `bff86c7`.
+## Verified Remaining Problems
 
-## Verified Review Findings
-
-1. `DEFAULT_EDITOR_CAMERA_CONTROLS_TUNING` does **not** match the installed Studio implementation. Installed `@threlte/studio/dist/extensions/editor-camera/CameraControls.svelte` sets:
+1. The overlay e2e test silently skips a pane when it is absent after scrolling:
 
 ```ts
-cameraControls.smoothTime = 0.05
-cameraControls.draggingSmoothTime = 0.05
-cameraControls.dollyToCursor = true
+const at50 = rectsAt50.find((p) => p.title === pane.title)
+if (at50) {
+  // assertions
+}
 ```
 
-The bridge currently uses `0.25`, `0.18`, and `false` while claiming to match Studio. Correct the constants, tests, and documentation to the installed values.
+If a pane disappears—the exact regression under test—`at50` is undefined and the test passes. Presence and identity must be asserted before coordinate comparisons.
 
-2. The bridge documentation says `getCurrentControls()` “always returns null,” but the module intentionally exposes `attachControls()` and its tests prove the getter returns an attached object. Correct wording everywhere: the singleton is **unattached by default/in current app integration**, so it returns `null` until a future supported owner calls `attachControls()`.
+2. The mission required independent coverage of the toolbar, Scene Hierarchy, Inspector, Static State, Default Camera preview, and Scroll Animator dropdown. The test/manual report verifies only three `.tp-dfwv` roots. Static State and Default Camera were not opened, and the Scroll Animator tooltip was not included. The status lists this as a risk but marks the overall acceptance item complete.
 
-3. The inert Scroll Animator title was only styled with `pointer-events: none`. It remains a real button in the DOM/accessibility tree and may remain keyboard-focusable/actionless. The e2e test title says the button is gone but only asserts mouse pointer behavior. This does not meet the semantic requirement.
+3. `AGENTS.md` now says toolbar controls “block normal pointer clicks” and recommends synthetic `dispatchEvent`, while the passing e2e camera-toggle test uses a native Playwright click. Synthetic events prove handlers, not human pointer actionability. Document the real distinction accurately.
 
-4. Fixed-overlay coverage and manual evidence inspect only the first `.tp-dfwv` (the toolbar), yet the report marks the toolbar and all floating panes complete. Verify each relevant pane rather than extrapolating from one element.
-
-5. The user's commit `bff86c7` landed after Pi wrote the status report and after the reported checks. The final report therefore omits the current `SparkSplats` API and is not the last repository action.
-
-6. `AGENTS.md` still contains a stale transaction-guard description saying path-prefixed keyframes use `startsWith('keyframes.')`. The implemented guard accepts only `keyframes` or a path ending in `.keyframes` and blocks descendants. Correct this while updating the current documentation.
+4. Commit `2ab4bc5` modified `AGENTS.md` after `.codex-handoff/status.md`, again violating the required final-report ordering. The final report must include the current tree and be the last modification before commit/push.
 
 ## Files Likely Involved
 
-- `src/lib/studio/editor-camera/editorCameraControlsBridge.ts`
-- `tests/unit/editorCameraControlsBridge.test.ts`
-- `src/lib/studio/scroll-animator/ScrollAnimatorExtension.svelte`
-- `src/app.css`
 - `tests/e2e/rad-viewer.spec.ts`
-- `src/lib/components/SparkSplats.svelte` only for a truthful comment/name if needed; preserve its API simplification
 - `AGENTS.md`
-- `.codex-handoff/status.md` as the final file action
+- `.codex-handoff/status.md`
+- Production Svelte/CSS only if a stable semantic selector is genuinely necessary; otherwise do not alter production code
 
-## Required Changes
+## Required Work
 
-### 1. Correct CameraControls defaults and bridge documentation
+### 1. Make overlay regression assertions strict
 
-- Change the three default tuning values to `0.05`, `0.05`, and `true`.
-- Update unit fixtures and assertions accordingly.
-- Preserve the structural, dependency-private-free attach/detach API.
-- Replace every “always returns null” claim with precise wording: no production integration currently attaches an instance; `getCurrentControls()` returns `null` by default and returns the attached object after an explicit future `attachControls()` call.
-- Keep the limitation clear: connecting Studio's internal instance still needs a supported upstream hook or an owned replacement editor-camera extension.
-
-### 2. Remove the inert title semantically
-
-- In the Scroll Animator extension only, ensure the non-expandable Tweakpane title-row button is not visible, focusable, or exposed as an actionable accessibility element.
-- A safe approach is to hide that narrowly scoped generated title row with `display: none` and add an explicit semantic heading such as `<h2 class="sa-heading">Scroll Animator</h2>` inside the extension content. Apply it in both selected and unselected panel states.
-- Do not hide title rows belonging to other Studio dropdowns or floating panes.
-- Replace the misleading e2e test with assertions that:
-  - no visible/focusable button named `Scroll Animator` exists inside the open extension;
-  - a semantic heading named `Scroll Animator` is visible;
-  - the real outer toolbar toggle still opens/closes the pane.
-- Keep the `mdiAnimationOutline` icon.
-
-### 3. Verify every required fixed overlay
-
-- Preserve `.tp-dfwv { position: fixed !important }` only if DOM inspection confirms `.tp-dfwv` is the fixed-pane root class and does not affect inline dropdown panes. Record that evidence accurately.
-- Extend the e2e test to identify and test all relevant elements independently, not `document.querySelector('.tp-dfwv')` alone:
-  - main toolbar;
+- Open/enable all requested UI before the baseline measurement:
+  - main Threlte Studio toolbar;
   - Scene Hierarchy;
   - Inspector;
-  - Static State if enabled/present;
-  - Default Camera preview when enabled;
+  - Static State pane/dialog, if this installed Studio build exposes it;
+  - Default Camera preview;
   - Scroll Animator dropdown/tooltip.
-- Open/enable panes as needed, capture named elements' viewport rectangles at the top, scroll to 50% and near the bottom, and assert each remains stable and visible within a small tolerance.
-- If one item uses a different fixed/draggable wrapper rather than `.tp-dfwv`, test its actual outer viewport-positioning element.
-- Do not claim an absent/unopened pane was verified. Report individual results.
+- Identify each expected element semantically by its title, heading, accessible label, or a narrowly added stable test marker. Do not rely on array index or generic first match.
+- The Scroll Animator tooltip is not necessarily `.tp-dfwv`; capture its actual outer viewport-positioned element.
+- Capture a record keyed by unique expected identity at top, 50%, and near-bottom scroll.
+- At every scroll position, assert:
+  - every expected key still exists;
+  - there are no duplicate keys;
+  - the expected/open pane set is unchanged;
+  - each pane is visible and intersects the viewport;
+  - `top` and `left` remain within a small tolerance of baseline.
+- Never guard a required assertion with `if (found)`. Fail clearly when an expected pane disappears.
 
-### 4. Strengthen the camera regression without redesigning it
+Critical shape:
 
-- Keep `<T is={camera} makeDefault />` and the removal of imperative camera registration.
-- Add automated coverage that explicitly establishes editor-camera mode off, verifies `data-active="true"`, toggles editor-camera mode on and observes `false`, then toggles it off and observes `true` again.
-- Preserve the manual evidence that parent transforms alter the app camera world transform while stationary.
-- Do not add more per-frame transform writers. If convenient, combine diagnostic work into the existing task, but this is not required.
+```ts
+for (const expected of expectedPaneNames) {
+  const baseline = atTop.get(expected)
+  const middle = at50.get(expected)
+  const bottom = at95.get(expected)
+  expect(baseline, `${expected} missing at top`).toBeDefined()
+  expect(middle, `${expected} missing at 50%`).toBeDefined()
+  expect(bottom, `${expected} missing at 95%`).toBeDefined()
+  // compare required rectangles; no optional branch
+}
+```
 
-### 5. Preserve and document the user's SparkSplats change
+- If Static State is genuinely absent from this installed/configured Studio build, prove that from the installed extension/configuration and report it as not applicable rather than silently omitting it. Do not claim it verified.
 
-The user intentionally:
+### 2. Verify native pointer actionability honestly
 
-- removed the scene-level offset so Baby Yoda is at the origin and visible;
-- removed `position`, `rotation`, and `scale` component props from `SparkSplats` because Studio authors the actual nested `<T is={mesh}>`, not wrapper props.
+- Automated stub e2e should continue using native Playwright `.click()` for the editor-camera toggle and Scroll Animator open/close control.
+- With the real Baby Yoda RAD, attempt normal pointer interaction through `playwright-cli click` (or the equivalent real pointer command) for both controls.
+- Do not use `.click()` in page evaluation, `dispatchEvent`, forced clicks, temporary CSS changes, or element hiding as evidence of pointer actionability.
+- If the real WebGL session still stalls the automation tool, report that exact limitation. A synthetic event may be separately documented only as handler-level diagnostics, not as a successful pointer test.
+- Correct `AGENTS.md` so it does not categorically claim canvas-overlay controls block normal clicks. Prefer native clicks; describe evaluate/dispatch only as a last-resort diagnostic for a known tool/GPU stall and clearly state what it does not verify.
 
-Preserve this behavior. `SparkSplats` should accept only `url` unless another existing non-transform prop is genuinely required. Update its comment and `AGENTS.md` to state that the SplatMesh `<T>` is the Studio-editable object and component transform props are intentionally not exposed.
+### 3. Keep the status and acceptance audit truthful
 
-Do not re-add the old `[5, -6, -5]` offset or wrapper transform props. Use `https://avner.us/baby_yoda-lod.rad` for the final manual check.
-
-### 6. Repair durable documentation
-
-Update `AGENTS.md` concisely with:
-
-- accurate transaction-guard suffix semantics;
-- accurate CameraControls defaults and attach/null semantics;
-- semantic Scroll Animator heading behavior;
-- actual overlay selector/DOM contract established by testing;
-- current `SparkSplats` API and direct Studio-editable `<T>` mesh;
-- the lightweight Baby Yoda RAD guidance already added.
-
-Do not add a chronological log.
+- Report each pane separately with top/50%/95% coordinates.
+- Mark each requested item met, not applicable with evidence, blocked, or not met.
+- Do not mark “all relevant panes verified” if any requested pane remains unopened or inferred only from a shared CSS class.
+- Include native pointer results separately for stub e2e and real-RAD manual automation.
+- Include commits `bff86c7`, `3bd45b2`, `2ab4bc5`, and this final correction as applicable.
 
 ## Constraints
 
-- Do not undo the user's `bff86c7` origin/API change.
-- Do not patch or deep-import `node_modules`.
-- Do not replace GSAP/ScrollTrigger or change interpolation/keyframe semantics.
+- Preserve the correct CameraControls defaults (`0.05`, `0.05`, `true`) and unattached-by-default semantics.
+- Preserve declarative `<T is={camera} makeDefault />` ownership and camera off/on/off behavior.
+- Preserve the semantic `<h2>` and hidden generated title row.
+- Preserve the user's origin-only, URL-only `SparkSplats` API.
+- Do not change ScrollAnimator playback, keyframes, transaction guard, GSAP/ScrollTrigger, CameraTarget look-at, Spark renderers, or LOD routing.
 - Do not reintroduce free navigation.
-- Do not alter ScrollTrigger's on-scroll-only animator updates.
-- Do not let ordinary ScrollAnimator transforms source-sync position/rotation/scale.
-- Do not change Spark dual-renderer/LOD routing.
-- Do not broadly hide Tweakpane title rows or broadly restyle unrelated Studio controls.
-- Do not perform unrelated refactors or dependency upgrades.
+- Do not patch/deep-import dependencies or broadly restyle Studio/Tweakpane.
+- Do not weaken tests to accommodate missing elements.
+- Avoid production changes unless a stable selector is required.
 
 ## Acceptance Criteria
 
-- [ ] CameraControls bridge defaults exactly match installed Studio: `0.05`, `0.05`, `true`.
-- [ ] Bridge docs consistently say “unattached by default/current integration,” not “always null”; attach/detach tests remain truthful.
-- [ ] The open extension has a visible semantic `Scroll Animator` heading and no visible/focusable/actionless title button of that name.
-- [ ] The animation icon and outer open/close toolbar control still work.
-- [ ] Automated rectangle checks independently cover every relevant toolbar/floating pane listed above at multiple scroll positions.
-- [ ] Editor-camera automated coverage proves the active camera transitions `true → false → true` across off/on/off.
-- [ ] Declarative default camera, CameraTarget look-at, stationary authoring behavior, and Spark routing remain intact.
-- [ ] `SparkSplats` remains at origin, exposes no transform props, and its nested `<T is={mesh}>` remains Studio-editable.
-- [ ] `AGENTS.md` is accurate on guard semantics, CameraControls, pane positioning, the extension heading, SparkSplats, and the Baby Yoda test URL.
-- [ ] All relevant checks are rerun after the user's `bff86c7` change and pass, or failures are reported exactly.
+- [ ] The overlay e2e test fails if any expected pane disappears at either later scroll position.
+- [ ] Toolbar, Scene Hierarchy, Inspector, Default Camera, and Scroll Animator dropdown are each opened, uniquely identified, visibility-checked, and coordinate-checked at top/50%/95%.
+- [ ] Static State is either tested the same way or explicitly proven unavailable/not applicable in this build.
+- [ ] Expected pane identity/set equality is asserted; no required check is conditional on a successful `.find()`.
+- [ ] Native Playwright clicks verify editor-camera and Scroll Animator controls in automated e2e.
+- [ ] Real Baby Yoda session native-pointer results are reported honestly; synthetic events are not presented as pointer evidence.
+- [ ] `AGENTS.md` accurately describes native clicks versus the optional diagnostic fallback.
+- [ ] All existing production fixes and the user's SparkSplats change remain intact.
+- [ ] The final status audit contains no claim contradicted by its risks/evidence.
+- [ ] `.codex-handoff/status.md` is the last modification before the final commit/push.
 
-Re-check every acceptance item before finalizing. Do not mark extrapolated, partial, or untested behavior complete.
+Re-check every acceptance item before finalizing.
 
 ## Tests to Run
 
-Add/update regression tests, then run:
+Update the e2e test and run:
 
 ```bash
 npm run check
@@ -144,38 +123,39 @@ npm run test:e2e
 npm run build
 ```
 
-Manual browser verification with `https://avner.us/baby_yoda-lod.rad` must confirm:
-
-1. Baby Yoda is centered/visible with the SplatMesh at origin.
-2. App/editor/app camera switching restores the nested camera.
-3. A stationary parent edit changes the camera world transform and is not overwritten.
-4. Each named Studio toolbar/pane remains fixed and interactive at top, middle, and bottom scroll positions.
-5. The extension has its icon, real outer toggle, semantic heading, and no dead inner button.
-
-If headless WebGL remains black, distinguish that limitation from the nonvisual DOM/camera checks and do not claim visual splat confirmation without a real visible render.
+Use `https://avner.us/baby_yoda-lod.rad` for the final real-browser pointer and coordinate verification. Trust actual test outcomes; do not convert failures into optional branches.
 
 ## Things Pi Must Not Change
 
-- The user's origin and SparkSplats transform-prop removal.
-- ScrollAnimator keyframe data or interpolation behavior.
-- The single scene-wide ScrollTrigger/runtime architecture.
-- CameraTarget look-at behavior.
-- Spark renderer ownership and LOD invariants.
-- Unrelated UI, configuration, dependencies, or tests.
+- Any correct runtime behavior from `3bd45b2`.
+- CameraControls bridge values/API.
+- Camera and CameraTarget hierarchy.
+- SparkSplats origin/API simplification.
+- ScrollAnimator source-sync/interpolation architecture.
+- Unrelated UI, dependencies, configuration, or tests.
+
+## AGENTS.md Update
+
+Update only the manual Playwright guidance necessary to state:
+
+- native pointer commands are the preferred interaction proof;
+- synthetic evaluate/dispatch is diagnostic-only and does not prove hit testing/actionability;
+- any recurring real-RAD GPU/tool limitation must be described conditionally, not as an inherent canvas-overlay behavior.
+
+Keep the existing accurate architecture and feature information concise.
 
 ## Expected Completion Report
 
 Rewrite `.codex-handoff/status.md` with:
 
-1. Summary and all implementation/user commit IDs in scope.
-2. Complete changed-file list, including the user's `SparkSplats` change.
-3. Each review finding and its resolution.
-4. Exact CameraControls defaults and truthful attach/null semantics.
-5. Semantic DOM/accessibility evidence for the heading and absence of a dead title button.
-6. Per-element fixed-overlay coordinate evidence at top/middle/bottom.
-7. Camera off/on/off evidence.
-8. Baby Yoda/SparkSplats verification and any headless visual limitation.
-9. Exact automated check results run after all code changes.
-10. Acceptance audit and remaining risks.
+1. Summary and complete commit list.
+2. Changed files.
+3. Explanation of the former false-positive test and strict replacement.
+4. Per-element top/50%/95% rectangle and visibility evidence.
+5. Static State availability/testing evidence.
+6. Native pointer results for stub e2e and real Baby Yoda automation, with synthetic diagnostics clearly separated if used.
+7. Exact automated test results.
+8. Acceptance audit with no inference presented as verification.
+9. Remaining risks.
 
-Always write `status.md` as the **last action** before the final commit and push. After writing it, do not run more verification and do not make more modifications. Commit all changes and push the current branch.
+Always write `status.md` as the **last action** before committing and pushing. After writing it, do not run verification, edit `AGENTS.md`, or make any other modification. Commit all work and push the current branch.
