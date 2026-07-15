@@ -1,15 +1,14 @@
 <script lang="ts">
-  import { onMount, onDestroy, type Snippet } from 'svelte'
+  import { onMount, onDestroy, tick, type Snippet } from 'svelte'
   import { ToolbarButton, ToolbarItem } from '@threlte/studio/extend'
-  import { computePosition, offset, flip, shift, type ComputePositionReturn } from '@floating-ui/dom'
+  import { autoUpdate, computePosition, flip, offset, shift, type ComputePositionReturn } from '@floating-ui/dom'
 
   let { children }: { children?: Snippet } = $props()
 
   let anchorEl = $state<HTMLElement>()
   let panelEl = $state<HTMLElement>()
   let open = $state(false)
-  let rafId: number | undefined
-  let resizeObserver: ResizeObserver | undefined
+  let stopAutoUpdate: (() => void) | undefined
 
   /** Simple portal action: moves element to document.body on mount, removes on destroy */
   function portal(node: HTMLElement): { destroy: () => void } {
@@ -21,46 +20,22 @@
     }
   }
 
-  function openPanel(): void {
-    open = true
-    requestAnimationFrame(() => {
-      if (!anchorEl || !panelEl) return
-      positionPanel()
-      // Watch for resize only (anchor is in a fixed container, doesn't move on scroll)
-      if (resizeObserver) resizeObserver.disconnect()
-      resizeObserver = new ResizeObserver(() => {
-        if (!anchorEl || !panelEl) return
-        positionPanel()
-      })
-      resizeObserver.observe(anchorEl)
-    })
-  }
-
-  function closePanel(): void {
-    open = false
-    if (resizeObserver) {
-      resizeObserver.disconnect()
-      resizeObserver = undefined
-    }
-    if (rafId !== undefined) {
-      cancelAnimationFrame(rafId)
-      rafId = undefined
-    }
-  }
-
-  function togglePanel(): void {
-    if (open) closePanel()
-    else openPanel()
-  }
-
-  function positionPanel(): void {
-    if (!anchorEl || !panelEl) return
-    computePosition(anchorEl, panelEl, {
+  /**
+   * Position the panel with a stale-result guard.
+   * Captures current anchor/panel references so a resolved promise from
+   * a previous open cycle cannot write stale coords onto a new panel.
+   */
+  function updatePosition(): void {
+    const anchor = anchorEl
+    const panel = panelEl
+    if (!anchor || !panel) return
+    computePosition(anchor, panel, {
       strategy: 'fixed',
       placement: 'bottom',
       middleware: [offset(2), flip(), shift({ padding: 6 })],
     }).then((pos: ComputePositionReturn) => {
-      if (panelEl) {
+      // Only apply if this is still the current open panel (same identity)
+      if (panelEl === panel && open) {
         Object.assign(panelEl.style, {
           left: `${pos.x}px`,
           top: `${pos.y}px`,
@@ -69,10 +44,34 @@
     })
   }
 
-  function handleKeydown(e: KeyboardEvent): void {
-    if (e.key === 'Escape' && open) closePanel()
+  async function openPanel(): Promise<void> {
+    open = true
+    await tick() // let Svelte render the panel element in the portal
+    if (!open || !anchorEl || !panelEl) return
+    stopAutoUpdate?.()
+    stopAutoUpdate = autoUpdate(anchorEl, panelEl, updatePosition)
   }
 
+  function closePanel(): void {
+    open = false
+    stopAutoUpdate?.()
+    stopAutoUpdate = undefined
+  }
+
+  function togglePanel(): void {
+    if (open) closePanel()
+    else openPanel()
+  }
+
+  // Close on Escape — return focus to the toggle button
+  function handleKeydown(e: KeyboardEvent): void {
+    if (e.key === 'Escape' && open) {
+      closePanel()
+      anchorEl?.focus()
+    }
+  }
+
+  // Close on outside pointer interaction (capture phase for reliability with canvas overlay)
   function handlePointerDown(e: PointerEvent): void {
     if (!open) return
     if (!anchorEl || !panelEl) return
@@ -89,8 +88,8 @@
   onDestroy(() => {
     document.removeEventListener('keydown', handleKeydown)
     document.removeEventListener('pointerdown', handlePointerDown, true)
-    if (resizeObserver) resizeObserver.disconnect()
-    if (rafId !== undefined) cancelAnimationFrame(rafId)
+    stopAutoUpdate?.()
+    stopAutoUpdate = undefined
     closePanel()
   })
 </script>
@@ -113,10 +112,11 @@
     bind:this={panelEl}
     use:portal
     class="sa-panel-tooltip"
-    role="menu"
-    aria-label="Scroll Animator"
+    role="dialog"
+    aria-modal="false"
+    aria-labelledby="sa-panel-heading"
   >
-    <h2 class="sa-heading">Scroll Animator</h2>
+    <h2 id="sa-panel-heading" class="sa-heading">Scroll Animator</h2>
     {#if children}
       {@render children()}
     {/if}

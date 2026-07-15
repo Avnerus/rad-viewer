@@ -63,7 +63,7 @@ Registered via `<Studio extensions={[ScrollAnimatorExtension]}>`. Uses public `u
 
 **Why not `DropDownPane`:** Studio's `DropDownPane` uses Floating UI's default `strategy: 'absolute'` internally, which returns document-relative coordinates. When applied to its `position: fixed` tooltip element after scrolling, this pushes the panel below the viewport. `FixedToolbarPane` uses `strategy: 'fixed'` explicitly and portals the panel to `document.body` so it renders above the Studio canvas overlay.
 
-**Positioning invariant:** `computePosition(anchor, panel, { strategy: 'fixed', ... })` must always use `strategy: 'fixed'`. The panel is portal'd to `document.body` via a simple Svelte action. A `ResizeObserver` on the anchor repositions on layout changes. The panel uses `:global(.sa-panel-tooltip) { position: fixed }` CSS scoped via `:global()` to survive the portal.
+**Positioning invariant:** `computePosition(anchor, panel, { strategy: 'fixed', ... })` must always use `strategy: 'fixed'`. The panel is portal'd to `document.body` via a simple Svelte action. `autoUpdate` from `@floating-ui/dom` owns the positioning lifecycle — it handles ancestor scroll/resize, element resize for both anchor and panel, and layout shifts. Cleanup is idempotent on close/destroy. A stale-result guard ensures async `computePosition` results cannot affect a closed or newly opened panel. The panel uses `:global(.sa-panel-tooltip) { position: fixed }` CSS scoped via `:global()` to survive the portal.
 
 **Panel content:**
 1. Semantic `<h2 class="sa-heading">Scroll Animator</h2>` heading (no inert Tweakpane title button).
@@ -74,7 +74,7 @@ Registered via `<Studio extensions={[ScrollAnimatorExtension]}>`. Uses public `u
 
 Active only for exactly one selected `ScrollAnimator`; otherwise shows "Select one ScrollAnimator". When source sync is unavailable, a warning is shown but percentage navigation and keyframe jumps remain functional.
 
-**Lifecycle:** Panel closes on Escape key and outside pointer interaction (capture phase). All observers are cleaned up on close and destroy.
+**Lifecycle:** Panel closes on Escape key (returns focus to toggle) and outside pointer interaction (capture phase). `autoUpdate` is cleaned up idempotently on close and destroy. The panel uses `role="dialog"` with `aria-modal="false"` and `aria-labelledby` referencing the semantic heading — not `role="menu"` — because its content (heading, number input, buttons) is form-like rather than a menu/menuitem structure.
 
 ## Source-Sync Guard Invariant
 
@@ -174,9 +174,13 @@ https://storage.googleapis.com/forge-dev-public/asundqui/rad/260217/cozy-spacesh
 
 `npm run test:e2e` builds with `VITE_E2E_STUB_SPARK=true`. Studio UI elements are rendered inside the WebGL canvas overlay, so Playwright actionability checks can fail. Tests use targeted `page.evaluate()` for pane toggle clicks when necessary, while verifying visible content through standard locators.
 
-**Scroll-first-then-open regression:** The Scroll Animator panel must be tested at scroll 0%, 50%, and 95% with the **scroll-first-then-open** sequence (scroll to percentage, then click the toolbar button). Opening at scroll 0 and then scrolling is insufficient — the bug was that `strategy: 'absolute'` returned document-relative coords that only manifested when the panel was opened after scrolling.
+**Scroll-first-then-open regression:** The Scroll Animator panel must be tested at scroll 0%, 50%, and 95% with the **scroll-first-then-open** sequence (scroll to percentage, then click the toolbar button). Tests use actual viewport geometry (`page.viewportSize()`) for assertions — not hard-coded constants.
 
-**Pointer evidence:** In the Spark-stub e2e tests, native Playwright `.click()` works reliably. With real splat rendering in headless Chromium, native clicks may time out due to GPU stalls; synthetic `dispatchEvent` via `page.evaluate()` can diagnose handler execution but does not verify hit testing/pointer actionability. Manual verification with `playwright-cli` should prefer native pointer commands.
+**Additional regression tests:** Panel stays anchored while scrolling with it open; panel repositions on viewport resize; panel repositions on content size change; repeated open/close and viewer remount (no leaked observers); Escape and outside pointer closure.
+
+**Pane identity:** The overlay test uses an explicit expected set of pane names. Inspector and Default Camera are tested in separate focused tests. The Inspector pane may be collapsed (width 0) in the stub build — identity is verified via toolbar button existence and `.tp-dfwv` title match.
+
+**Pointer evidence:** In the Spark-stub e2e tests, native Playwright `.click()` works reliably for hierarchy items, toolbar buttons, and canvas clicks. Some toolbar buttons inside the canvas overlay (Static State, Inspector) use `evaluate()`-based DOM `.click()` because native clicks are intercepted by the canvas. With real splat rendering in headless Chromium, native clicks may time out due to GPU stalls; synthetic `dispatchEvent` via `page.evaluate()` can diagnose handler execution but does not verify hit testing/pointer actionability. Manual verification with `playwright-cli` should prefer native pointer commands.
 
 For real-splat visual verification, use `playwright-cli screenshot` with the lightweight RAD URL (see above). Screenshots capture the compositor output correctly even when `readPixels()` returns black in headless mode.
 
