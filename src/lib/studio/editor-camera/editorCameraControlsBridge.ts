@@ -7,8 +7,9 @@
  * helper so that, when an upstream public hook or an owned editor-camera
  * extension becomes available, the connection can be made in one place.
  *
- * Current state: **unattached**. The `getCurrentControls()` getter always
- * returns `null`. Do not treat this as a live connection.
+ * Current state: **unattached by default**. No production integration in this
+ * app currently attaches an instance, so `getCurrentControls()` returns `null`
+ * until a future supported owner calls `attachControls()`.
  *
  * To connect in the future:
  * 1. Find or create a supported public path to the CameraControls instance
@@ -62,13 +63,14 @@ export interface EditorCameraControlsTuning {
 }
 
 /**
- * Default tuning values. These match Studio's current defaults and can be
- * adjusted here when the bridge is connected.
+ * Default tuning values. Match the installed Studio defaults
+ * (`@threlte/studio/dist/extensions/editor-camera/CameraControls.svelte`):
+ * `smoothTime = 0.05`, `draggingSmoothTime = 0.05`, `dollyToCursor = true`.
  */
 export const DEFAULT_EDITOR_CAMERA_CONTROLS_TUNING: EditorCameraControlsTuning = {
-  smoothTime: 0.25,
-  draggingSmoothTime: 0.18,
-  dollyToCursor: false,
+  smoothTime: 0.05,
+  draggingSmoothTime: 0.05,
+  dollyToCursor: true,
 }
 
 /* ------------------------------------------------------------------ */
@@ -117,7 +119,8 @@ export function detachControls(): void {
 
 /**
  * Get the currently attached CameraControls instance, or `null` if none.
- * Returns `null` until `attachControls()` is called with a real instance.
+ * Returns `null` by default (no production integration attaches one).
+ * Returns the attached object after an explicit `attachControls()` call.
  */
 export function getCurrentControls(): EditorCameraControlsLike | null {
   return currentControls

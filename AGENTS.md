@@ -7,7 +7,7 @@ A client-side Threlte/Svelte 5/TypeScript web app for viewing Spark 2.x streamin
 **Key files:**
 - `src/App.svelte` — Root component. Landing screen ↔ viewer state machine. `<Canvas>` with `<Studio extensions={[ScrollAnimatorExtension]}>` wrapping `RadViewerScene`.
 - `src/lib/components/RadViewerScene.svelte` — Camera setup, ScrollTrigger, `ScrollAnimator` instances (camera + target), `CameraTarget`, SparkRenderer bridge, and SplatMesh. Uses `useTask` for per-frame camera look-at. Scene-wide `ScrollAnimator` playback via `scene.traverse`.
-- `src/lib/components/SparkSplats.svelte` — SplatMesh (Threlte `<T>` declarative) lifecycle only.
+- `src/lib/components/SparkSplats.svelte` — SplatMesh lifecycle only. Accepts `url` prop; the nested `<T is={mesh}>` is the Studio-editable object. No transform props (`position`, `rotation`, `scale`) are exposed — Studio authors the mesh directly.
 - `src/lib/components/SparkStudioBridge.svelte` — Manages dual SparkRenderer lifecycle via `createSparkStudioRenderer`.
 - `src/lib/spark/ScrollAnimator.ts` — Three.js `Object3D` subclass with `keyframes` property and `applyScrollPercentage()`.
 - `src/lib/spark/scrollAnimation.ts` — Pure keyframe model, canonicalization (with dedup), upsert/delete, bracketing, and interpolation (position lerp + quaternion slerp).
@@ -60,7 +60,7 @@ The `scrollAnimatorRuntime` singleton bridges the scene and extension:
 
 Registered via `<Studio extensions={[ScrollAnimatorExtension]}>`. Uses public `useObjectSelection` and `useTransactions` from `@threlte/studio/extensions`. Shows a `DropDownPane` with `icon="mdiAnimationOutline"` (default toggle behavior) with:
 
-- The `DropDownPane` title bar inside the tooltip is styled as a non-interactive heading via targeted CSS in `app.css` (`.scroll-animator-extension .tooltip .tp-rotv_b`). This removes the button-like appearance of the Tweakpane title row when `userExpandable={false}`.
+- The `DropDownPane` title bar inside the tooltip is hidden with `display: none` via targeted CSS in `app.css` (`.scroll-animator-extension .tooltip .tp-rotv_b`). A semantic `<h2 class="sa-heading">Scroll Animator</h2>` heading is rendered in the extension content instead. This removes the inert Tweakpane title button from the DOM visibility, focus order, and accessibility tree.
 1. Live ScrollTrigger percentage from the shared runtime bridge.
 2. Numeric percentage input (0..100) — available in all modes; draft string not overwritten while focused; commits on Enter/blur with double-commit guard.
 3. Sorted keyframe list with clickable jump buttons (always) and delete buttons (source-sync only).
@@ -70,7 +70,7 @@ Active only for exactly one selected `ScrollAnimator`; otherwise shows "Select o
 
 ## Source-Sync Guard Invariant
 
-The `guardScrollAnimatorTransactions` helper runs via `useTransactions().onTransaction()`. For any transaction whose object is a branded `ScrollAnimator`, it clears `transaction.sync` unless `attributeName` is `keyframes` or starts with `keyframes.`. This prevents Studio's transform controls from writing `position`, `rotation`, or `scale` into Svelte source, while allowing `keyframes` mutations through.
+The `guardScrollAnimatorTransactions` helper runs via `useTransactions().onTransaction()`. For any transaction whose object is a branded `ScrollAnimator`, it clears `transaction.sync` unless `attributeName` is exactly `keyframes` or ends with `.keyframes` (path-prefixed). Descendant attributes like `keyframes.0` or `scene.keyframes.position` are blocked. This prevents Studio's transform controls from writing `position`, `rotation`, or `scale` into Svelte source, while allowing `keyframes` mutations through.
 
 Keyframe mutations use `transactions.buildTransaction()` which derives source metadata from the object's `userData.threlteStudio` automatically. No private metadata imports needed.
 
@@ -127,7 +127,7 @@ Tweakpane's `.tp-dfwv` class (used by Studio's toolbar and other fixed panes) de
 
 ## Editor CameraControls Bridge
 
-`src/lib/studio/editor-camera/editorCameraControlsBridge.ts` defines a typed, dependency-free interface for tuning Studio editor CameraControls parameters (`smoothTime`, `draggingSmoothTime`, `dollyToCursor`). The bridge is **currently unattached** — `getCurrentControls()` always returns `null` — because Studio's `CameraControls.svelte` does not expose its `camera-controls` instance through a public API. Connecting it requires an upstream public hook or an owned editor-camera extension replacement. Unit tests cover the full attach/detach/tuning API.
+`src/lib/studio/editor-camera/editorCameraControlsBridge.ts` defines a typed, dependency-free interface for tuning Studio editor CameraControls parameters. Default values match the installed Studio defaults: `smoothTime: 0.05`, `draggingSmoothTime: 0.05`, `dollyToCursor: true`. The bridge is **unattached by default** — no production integration in this app attaches an instance, so `getCurrentControls()` returns `null` until a future supported owner calls `attachControls()`. Connecting Studio's internal instance requires an upstream public hook or an owned editor-camera extension replacement. Unit tests cover the full attach/detach/tuning API.
 
 ## Lightweight Authoring-Test RAD
 

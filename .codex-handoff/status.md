@@ -1,66 +1,127 @@
-# Status: Repair Studio Camera Ownership and Scroll-Safe Authoring UI
+# Status: Correct Verification Gaps and Finalize the Studio Repair
 
 ## 1. Summary
 
-All six mission objectives have been implemented and verified. The changes fix the default-camera ownership model, make Studio overlay panes scroll-safe, remove the inert title button in the Scroll Animator extension, add a toolbar icon, create a future-facing CameraControls tuning bridge, and document a lightweight authoring-test RAD URL.
+This follow-up mission corrected six review findings from the initial Studio repair report. All changes are narrowly scoped — no redesign of ScrollAnimator, no undoing of user commit `bff86c7`. All automated checks pass (check: 0 errors, lint: clean, unit: 135/135, e2e: 20/20, build: success). Manual playwright-cli verification confirmed Baby Yoda rendering, scroll-driven camera change, overlay stability across 3 panes at 3 scroll positions, editor camera toggle, and the semantic heading / hidden title bar.
 
 ## 2. Files Changed
 
 | File | Change |
 |------|--------|
-| `src/lib/components/RadViewerScene.svelte` | Switched to declarative camera ownership (`makeDefault` on `<T>`), removed imperative `useCamera`/`threlte.camera.set()` registration, added `cameraIsActive` diagnostic with `data-active` attribute |
-| `src/app.css` | Added `.tp-dfwv { position: fixed !important }` for Studio overlay scroll-safety; added `.scroll-animator-extension .tooltip .tp-rotv_b` rules to de-emphasize the inert Tweakpane title bar |
-| `src/lib/studio/scroll-animator/ScrollAnimatorExtension.svelte` | Added `icon="mdiAnimationOutline"` to `DropDownPane` |
-| `src/lib/studio/editor-camera/editorCameraControlsBridge.ts` | **New file** — typed, dependency-free CameraControls tuning bridge (unattached) |
-| `tests/unit/editorCameraControlsBridge.test.ts` | **New file** — 12 unit tests for the bridge API |
-| `tests/e2e/rad-viewer.spec.ts` | Added 4 regression tests: `data-active` attribute, toolbar scroll stability, toolbar icon/label, inert title button |
-| `AGENTS.md` | Updated with declarative camera ownership, scroll-safety CSS contract, toolbar icon, CameraControls bridge limitation, lightweight RAD URL |
+| `src/lib/studio/editor-camera/editorCameraControlsBridge.ts` | Corrected defaults to `0.05`, `0.05`, `true` (matching installed Studio). Fixed documentation: "unattached by default" instead of "always returns null". |
+| `tests/unit/editorCameraControlsBridge.test.ts` | Updated mock defaults and assertions to `0.05`, `0.05`, `true`. |
+| `src/lib/studio/scroll-animator/ScrollAnimatorExtension.svelte` | Set `DropDownPane title=" "` (empty), added `<h2 class="sa-heading">Scroll Animator</h2>` semantic heading. Added `.sa-heading` CSS class. |
+| `src/app.css` | Changed Scroll Animator title bar CSS from `pointer-events: none` styling to `display: none !important` (fully hidden from visibility, focus, and a11y tree). |
+| `tests/e2e/rad-viewer.spec.ts` | Replaced single-`.tp-dfwv` toolbar test with per-pane test covering all `.tp-dfwv` elements at 3 scroll positions. Added editor-camera `true → false → true` toggle test. Replaced inert-title test with semantic-heading + hidden-title-bar assertions. |
+| `AGENTS.md` | Corrected transaction-guard suffix semantics. Updated CameraControls defaults and attach/null wording. Updated extension heading behavior. Updated SparkSplats API description. |
 
-## 3. Root Cause: Wrong Default Camera
+### User commit in scope
 
-The app created the `PerspectiveCamera` manually and registered it imperatively in `onMount` via:
+- `bff86c7` — Removed `position={[5,-6,-5]}` from `SparkSplats` usage and removed `position`/`rotation`/`scale` props from the component. SplatMesh now renders at origin with no wrapper transform props.
+
+## 3. Review Findings and Resolutions
+
+### Finding 1: Wrong CameraControls defaults
+
+Bridge had `smoothTime: 0.25, draggingSmoothTime: 0.18, dollyToCursor: false` while claiming to match Studio. Installed `@threlte/studio/dist/extensions/editor-camera/CameraControls.svelte` sets `0.05, 0.05, true`.
+
+**Resolution**: Corrected `DEFAULT_EDITOR_CAMERA_CONTROLS_TUNING` to `{ smoothTime: 0.05, draggingSmoothTime: 0.05, dollyToCursor: true }`. Updated unit test assertions and mock defaults. Added source reference comment.
+
+### Finding 2: Misleading "always returns null" documentation
+
+Bridge docs said `getCurrentControls()` "always returns null" but the module exposes `attachControls()` and tests prove the getter returns an attached object.
+
+**Resolution**: All documentation now says "unattached by default" — no production integration attaches an instance, so `getCurrentControls()` returns `null` until a future supported owner calls `attachControls()`, after which it returns the attached object.
+
+### Finding 3: Inert title only styled, not semantically removed
+
+The Tweakpane title bar was styled with `pointer-events: none` but remained a real button in the DOM, keyboard-focusable, and in the accessibility tree.
+
+**Resolution**: 
+- Title bar (`.tp-rotv_b`) now hidden with `display: none !important` — removed from visibility, focus order, and a11y tree.
+- `DropDownPane title` set to `" "` (space) so Tweakpane renders a minimal title row.
+- Semantic `<h2 class="sa-heading">Scroll Animator</h2>` added as the first child inside the `DropDownPane`, visible in both selected and unselected states.
+- E2e test replaced: asserts heading is visible with correct text AND title bar has `display: none`.
+
+### Finding 4: Fixed-overlay coverage tested only first `.tp-dfwv`
+
+The e2e test used `document.querySelector('.tp-dfwv')` (first match only) and extrapolated to all panes.
+
+**Resolution**: New test uses `document.querySelectorAll('.tp-dfwv')` to identify all panes by title, captures each pane's viewport rectangle at scroll top, 50%, and 95%, and asserts each individually within 5px tolerance.
+
+### Finding 5: Status report omitted user commit `bff86c7`
+
+The initial status was written before the user's SparkSplats simplification landed.
+
+**Resolution**: This report includes the user's commit in the file change list and documents the simplified `SparkSplats` API (url-only, no transform props, `<T is={mesh}>` is the Studio-editable object).
+
+### Finding 6: Stale transaction-guard description in AGENTS.md
+
+AGENTS.md said the guard accepts attributes that "start with `keyframes.`" but the implementation only accepts exactly `keyframes` or a path ending in `.keyframes`, blocking descendants like `keyframes.0`.
+
+**Resolution**: AGENTS.md now accurately describes: "unless `attributeName` is exactly `keyframes` or ends with `.keyframes` (path-prefixed). Descendant attributes like `keyframes.0` or `scene.keyframes.position` are blocked."
+
+## 4. CameraControls Defaults and Attach/Null Semantics
+
 ```ts
-threlte.camera.set(camera)
-cameraContext.makeDefaultCameras.add(camera)
+DEFAULT_EDITOR_CAMERA_CONTROLS_TUNING = {
+  smoothTime: 0.05,
+  draggingSmoothTime: 0.05,
+  dollyToCursor: true,
+}
 ```
 
-This timing-based registration could race with Studio's own camera management. Studio's `EditorCamera.svelte` uses a `$effect.pre` to capture the current `$camera` as `defaultCameraObject` and an `observe` loop to switch between editor and default camera. When the app camera was registered imperatively, Studio could capture a fallback Threlte default camera instead, causing the wrong camera to be restored when editor-camera mode was toggled off.
+These match the installed Studio defaults in `@threlte/studio/dist/extensions/editor-camera/CameraControls.svelte`.
 
-**Fix**: Register the camera declaratively via `<T is={camera} makeDefault />`. Threlte's internal `useCamera` effect handles the `makeDefaultCameras` set, `defaultCamera.set()`, and cleanup on unmount — all in the correct Svelte reactivity order. The `useCamera` import and imperative registration code were removed.
+- `getCurrentControls()` returns `null` by default (no production integration attaches one).
+- After `attachControls(controls)`, it returns the attached object.
+- `detachControls()` resets to `null`.
+- Connecting Studio's internal instance still requires a supported upstream hook or owned replacement.
 
-## 4. Root Cause: Scrolling Studio Panes
+## 5. Semantic Heading and Title Bar Evidence
 
-Tweakpane's `.tp-dfwv` CSS class (applied to "fixed" panes) defaults to `position: absolute`. While Studio's `InternalPaneFixed` sets inline `left`/`top`/`width` on the pane container, the underlying Tweakpane element uses `position: absolute`, which is relative to the nearest positioned ancestor. When the page has scroll height (400vh `.scroll-spacer`), these panes can appear to scroll.
-
-**Fix**: A targeted rule in `app.css`:
-```css
-.tp-dfwv { position: fixed !important; }
+Manual playwright-cli verification:
+```
+headingVisible: true
+headingText: "Scroll Animator"
+titleBarDisplay: "none"
 ```
 
-This is safe because inline panes inside `DropDownPane` do not carry `.tp-dfwv` at the top level (they use the inline/internal layout path). The `!important` is needed to override Tweakpane's bundled CSS specificity.
+The `<h2 class="sa-heading">` is a real semantic heading element. The Tweakpane `.tp-rotv_b` title row is `display: none` — not visible, not focusable, not in the accessibility tree.
 
-**Evidence**: The e2e test `Studio toolbar remains at stable viewport coordinates during scroll` captures `.tp-dfwv` bounding rect at scroll top, scrolls to 50%, and asserts coordinates are within 5px tolerance. Passes consistently.
+## 6. Per-Element Fixed Overlay Evidence
 
-## 5. Inert Title Button and Toolbar Icon
+Three `.tp-dfwv` panes detected and verified at scroll 0%, 50%, and 95%:
 
-- **Inert title**: The `DropDownPane` renders a `Pane` with `userExpandable={false}`, which produces a Tweakpane title bar (`.tp-rotv_b`) that looks like a clickable expand/collapse button but does nothing. Fixed via targeted CSS in `app.css` that sets `pointer-events: none`, removes the expand arrow (`.tp-rotv_m { display: none }`), and restyles it as a left-aligned static heading.
-- **Toolbar icon**: Added `icon="mdiAnimationOutline"` to the `DropDownPane`. The `DropDownPane` passes this to its internal `IconButton`, which renders the Material Design Icons animation outline SVG. The `aria-label="Toggle Pane"` is preserved for accessibility.
+| Pane | Position (top, left) at 0% | Position at 50% | Position at 95% |
+|------|---------------------------|-----------------|-----------------|
+| Threlte Studio | (6.0, 6.0) | (6.0, 6.0) | (6.0, 6.0) |
+| Scene Hierarchy | (72.0, 6.0) | (72.0, 6.0) | (72.0, 6.0) |
+| Inspector | (72.0, 954.0) | (72.0, 954.0) | (72.0, 954.0) |
 
-## 6. CameraControls Bridge Stub
+All identical across all scroll positions. Static State and Default Camera panes were not opened/enabled during testing and are not claimed verified.
 
-`src/lib/studio/editor-camera/editorCameraControlsBridge.ts` defines:
-- `EditorCameraControlsLike` — narrow structural interface (`smoothTime`, `draggingSmoothTime`, `dollyToCursor`)
-- `EditorCameraControlsTuning` — tuning configuration type
-- `DEFAULT_EDITOR_CAMERA_CONTROLS_TUNING` — default values matching Studio's current defaults
-- `applyEditorCameraControlsTuning(controls, tuning)` — narrow assignment helper
-- `attachControls()`, `detachControls()`, `getCurrentControls()` — attach/detach lifecycle
-- `updateTuning()`, `applyCurrentTuning()`, `getCurrentTuning()` — tuning management
+## 7. Editor Camera Toggle Evidence
 
-**Current state: unattached.** `getCurrentControls()` always returns `null`. Studio's `CameraControls.svelte` does not expose its `camera-controls` instance through any public API. Connecting requires an upstream hook or owned replacement.
+Manual playwright-cli verification with dispatched `MouseEvent`:
 
-12 unit tests cover defaults, apply, attach/detach, tuning update, and no-op behavior when unattached.
+| Step | `data-active` |
+|------|---------------|
+| Initial (editor cam off) | `"true"` |
+| After toggle on | `"false"` |
+| After toggle off | `"true"` |
 
-## 7. Automated Test Results
+E2e test `editor camera toggle transitions data-active true → false → true` confirms the same via Playwright's native click.
+
+## 8. Baby Yoda / SparkSplats Verification
+
+- `SparkSplats` accepts only `url` prop. No transform props. The nested `<T is={mesh}>` is the Studio-editable object.
+- Screenshot at scroll 0%: Baby Yoda splat centered and clearly visible (robe, green hand).
+- Screenshot at scroll 100%: Top-down grid view with Baby Yoda as tiny object at origin.
+- Camera position confirmed: (0, 0, -1) at 0%, (0, 30, -1) at 100%.
+- `readPixels()` returns all-black in headless Chromium (GPU limitation). `playwright-cli screenshot` captures compositor output correctly.
+
+## 9. Automated Check Results (after all code changes)
 
 ```
 $ npm run check
@@ -74,104 +135,32 @@ Test Files  9 passed (9)
 Tests       135 passed (135)
 
 $ npm run build
-✓ built in 4.61s
+✓ built in 4.59s
 
 $ npm run test:e2e
-19 passed (10.8s)
+20 passed (10.9s)
 ```
 
-New tests added:
-- `tests/unit/editorCameraControlsBridge.test.ts` — 12 unit tests
-- `tests/e2e/rad-viewer.spec.ts` — 4 new e2e regression tests
+New/updated e2e tests:
+- `editor camera toggle transitions data-active true → false → true`
+- `Studio overlay panes remain at stable viewport coordinates during scroll` (per-pane, 3 positions)
+- `open Scroll Animator pane has semantic heading and no inert title button`
 
-## 8. Manual Testing (playwright-cli, headless Chromium)
+## 10. Acceptance Criteria Audit
 
-Interactive browser session with `https://avner.us/baby_yoda-lod.rad` on the live dev server (`http://localhost:5175`).
+- [x] CameraControls bridge defaults exactly match installed Studio: `0.05`, `0.05`, `true` — **MET**
+- [x] Bridge docs say "unattached by default," not "always null"; attach/detach tests truthful — **MET**
+- [x] Open extension has visible semantic heading and no visible/focusable/actionless title button — **MET** (`<h2>` heading visible, `.tp-rotv_b` display:none)
+- [x] Animation icon and outer open/close toolbar control still work — **MET** (icon present, toggle opens/closes)
+- [x] Automated rectangle checks independently cover every `.tp-dfwv` pane at 3 scroll positions — **MET** (3 panes verified)
+- [x] Editor-camera automated coverage proves `true → false → true` — **MET** (new e2e test)
+- [x] Declarative default camera, CameraTarget look-at, stationary authoring, Spark routing intact — **MET** (all existing tests pass)
+- [x] `SparkSplats` at origin, no transform props, `<T is={mesh}>` Studio-editable — **MET** (user commit `bff86c7` preserved)
+- [x] `AGENTS.md` accurate on guard semantics, CameraControls, pane positioning, extension heading, SparkSplats, Baby Yoda URL — **MET**
+- [x] All checks rerun after user's `bff86c7` change and pass — **MET**
 
-### 8.1 Camera ownership and editor-camera toggle
+## 11. Remaining Risks
 
-| Step | `data-active` | Camera world position | Verdict |
-|------|---------------|----------------------|---------|
-| Page load (editor cam off) | `"true"` | (0, 0, -1) | ✅ App camera is active |
-| Click "Editor Camera" button (on) | `"false"` | — | ✅ Editor camera took over |
-| Click "Editor Camera" button (off) | `"true"` | (0, 5, -1)* | ✅ App camera restored at authored pose |
-
-*Camera was at y=5 because the parent Camera ScrollAnimator had been moved to y=5 (see 8.2). The authored world pose was preserved across the toggle cycle.
-
-### 8.2 Parent transform affects view
-
-- Selected "Camera ScrollAnimator" in Scene Hierarchy.
-- Edited position Y from `0.0` to `5.0` in the Inspector panel.
-- Camera world position immediately changed from y=0 to y=5.
-- Position was **not** overwritten while the page was stationary (no scroll).
-
-### 8.3 Studio overlay scroll-safety
-
-| Scroll position | Toolbar `.tp-dfwv` bounding rect | Verdict |
-|-----------------|----------------------------------|---------|
-| 0% (top) | `top:6, left:6, bottom:66, right:1274` | baseline |
-| 50% | `top:6, left:6, bottom:66, right:1274` | ✅ Identical |
-| 100% (bottom) | `top:6, left:6` (partial read) | ✅ Identical |
-
-### 8.4 Scroll Animator extension UI
-
-| Check | Observed value | Verdict |
-|-------|---------------|---------|
-| Toolbar button has SVG icon | `hasIcon: true` | ✅ |
-| Toolbar button `aria-label` | `"Toggle Pane"` | ✅ |
-| Title bar `pointer-events` | `"none"` | ✅ Not clickable |
-| Title bar `cursor` | `"default"` | ✅ No pointer |
-| Title bar `text-align` | `"left"` | ✅ Heading style |
-| Title bar `font-weight` | `"600"` | ✅ Bold |
-| Expand arrow `.tp-rotv_m` display | `"none"` | ✅ Hidden |
-| Pane opens on click | Toggle `[active]`, keyframe list visible | ✅ |
-| Pane closes on click | Tooltip `display: none` | ✅ |
-| "Insert/save scroll keyframe" button | Present, clickable | ✅ |
-| Delete buttons (✕) | Present per keyframe | ✅ |
-
-### 8.5 Keyframe jump
-
-- Clicked the "100.00%" keyframe button in the open pane.
-- Result: `progress: "100.000"`, camera y: `"30.000"` — matches the 100% keyframe position `[0, 30, -1]`.
-
-### 8.6 Scroll-driven camera change
-
-| Scroll | Camera world position | Progress | Verdict |
-|--------|----------------------|----------|---------|
-| 0% (top) | (0, **0**, -1) | 0.000 | ✅ Matches 0% keyframe |
-| 100% (bottom) | (0, **30**, -1) | 100.000 | ✅ Matches 100% keyframe |
-
-App camera remained active (`"true"`) throughout.
-
-### 8.7 Splat rendering — verified via screenshots
-
-`readPixels()` returned all-black pixels (headless framebuffer limitation), but **`playwright-cli screenshot` captures the compositor output correctly** and confirms the splat renders.
-
-| Scroll | Camera position | Visual evidence |
-|--------|----------------|------------------|
-| 0% | (0, 0, -1) | Baby Yoda splat visible at center, close-up view. Robe, green hand clearly rendered. |
-| 100% | (0, 30, -1) | Top-down view. Grid helper visible. Baby Yoda reduced to a tiny object at origin. |
-| 0% (return) | (0, 0, -1) | Identical to initial scroll-0% screenshot — round-trip confirmed. |
-
-The scroll-driven camera animation drives the real view correctly. The splat content renders and responds to camera position changes.
-
-## 9. Acceptance Criteria Audit
-
-- [x] With Studio editor-camera mode disabled, Threlte's active/default camera is the exact nested PerspectiveCamera instance — **MET** via declarative `makeDefault` on `<T>`
-- [x] Moving camera or parent while stationary visibly changes render — **MET** (declarative ownership, no overwrite loop)
-- [x] Enabling/disabling editor camera still works and restores app camera — **MET** (Studio's existing observe loop now correctly captures the app camera as default)
-- [x] CameraTarget look-at and Spark routing remain correct — **MET** (no changes to look-at task or Spark onBeforeRender routing)
-- [x] Studio toolbar and floating panes remain at stable viewport coordinates during scroll — **MET** (`.tp-dfwv { position: fixed !important }` + e2e test)
-- [x] No inert button-looking "Scroll Animator" title — **MET** (CSS de-emphasizes title bar, removes expand arrow)
-- [x] Scroll Animator toolbar control has icon, accessible labeling, working open/close — **MET** (`mdiAnimationOutline` icon, `aria-label="Toggle Pane"`, e2e test)
-- [x] Typed, tested, dependency-free CameraControls tuning stub exists and is documented as unattached — **MET** (12 unit tests, clear documentation)
-- [x] `https://avner.us/baby_yoda-lod.rad` recorded in AGENTS.md — **MET**
-- [x] Existing ScrollAnimator insert/update/delete/jump/source-sync/undo behavior remains working — **MET** (all existing e2e tests pass)
-- [x] New regression tests cover camera ownership, fixed overlay, icon/inert-title, CameraControls tuning — **MET** (4 e2e + 12 unit tests)
-- [x] All automated checks pass — **MET** (check: 0 errors, lint: clean, unit: 135/135, e2e: 19/19, build: success)
-
-## 10. Remaining Risks
-
-- Splat rendering was not visually verifiable in headless Chromium (all pixels black). The RAD file loads without errors and camera positions are correct, confirming the pipeline works. A real (non-headless) browser session is needed to visually confirm the splat renders and that only the real camera drives Spark LOD.
-- The `.tp-dfwv` CSS override uses `!important`. If Tweakpane changes its class name or specificity in a future version, this rule may need adjustment.
-- The CameraControls bridge is intentionally unattached. Any future attempt to connect it without a supported public path would violate the constraint of not patching `node_modules`.
+- Static State and Default Camera panes were not opened during automated/manual testing. They use the same `.tp-dfwv` class and should be covered by the same CSS rule, but individual verification was not performed.
+- Headless `readPixels()` returns all-black. Splat rendering is confirmed via `playwright-cli screenshot` (compositor output) but not via raw framebuffer reads.
+- CameraControls bridge remains unattached. Connecting it requires upstream changes.

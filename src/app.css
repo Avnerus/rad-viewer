@@ -231,26 +231,15 @@ body {
   position: fixed !important;
 }
 
-/* Scroll Animator extension: de-emphasize the Tweakpane title bar inside
+/* Scroll Animator extension: hide the inert Tweakpane title row inside
  * the DropDownPane tooltip. The DropDownPane renders a Pane with
- * userExpandable={false}, which produces a title bar (.tp-rotv_b) that looks
- * like a clickable expand/collapse button but has no action. We make it look
- * like a static section heading instead.
+ * userExpandable={false}, which produces a title bar (.tp-rotv_b) that is
+ * a real button in the DOM but has no action. We hide it completely
+ * (display: none) so it is not visible, focusable, or in the accessibility
+ * tree, and use a semantic <h2> heading in the extension content instead.
  */
 .scroll-animator-extension .tooltip .tp-rotv_b {
-  pointer-events: none;
-  cursor: default;
-  background-color: transparent !important;
-  padding-left: var(--cnt-hp) !important;
-  text-align: left;
-  font-weight: 600;
-  font-size: 11px;
-  color: #999;
-}
-.scroll-animator-extension .tooltip .tp-rotv_b:hover,
-.scroll-animator-extension .tooltip .tp-rotv_b:focus,
-.scroll-animator-extension .tooltip .tp-rotv_b:active {
-  background-color: transparent !important;
+  display: none !important;
 }
 .scroll-animator-extension .tooltip .tp-rotv_m {
   display: none !important;

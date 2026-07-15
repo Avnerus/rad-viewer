@@ -195,7 +195,8 @@
 
 <ToolbarItem position="left">
   <div class="scroll-animator-extension">
-    <DropDownPane title="Scroll Animator" icon="mdiAnimationOutline">
+    <DropDownPane title=" " icon="mdiAnimationOutline">
+      <h2 class="sa-heading">Scroll Animator</h2>
       {#if !uiState.animator}
         <div class="sa-no-selection">Select one ScrollAnimator</div>
       {:else}
@@ -277,6 +278,15 @@
 {@render children?.()}
 
 <style>
+  .sa-heading {
+    font-size: 11px;
+    font-weight: 600;
+    color: #999;
+    margin: 0;
+    padding: 4px 8px;
+    pointer-events: none;
+  }
+
   .sa-no-selection {
     padding: 8px;
     color: #888;

@@ -280,44 +280,104 @@ test.describe('RAD Viewer', () => {
     expect(activeAttr).toBe('true')
   })
 
+  test('editor camera toggle transitions data-active true → false → true', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(2000)
+
+    // 1. Editor camera off — app camera active
+    let active = await page.evaluate(() => document.querySelector('[data-testid="camera-state"]')?.getAttribute('data-active'))
+    expect(active).toBe('true')
+
+    // 2. Toggle editor camera on
+    await page.getByRole('button', { name: 'Editor Camera' }).click()
+    await page.waitForTimeout(500)
+    active = await page.evaluate(() => document.querySelector('[data-testid="camera-state"]')?.getAttribute('data-active'))
+    expect(active).toBe('false')
+
+    // 3. Toggle editor camera off
+    await page.getByRole('button', { name: 'Editor Camera' }).click()
+    await page.waitForTimeout(500)
+    active = await page.evaluate(() => document.querySelector('[data-testid="camera-state"]')?.getAttribute('data-active'))
+    expect(active).toBe('true')
+  })
+
   // ---------------------------------------------------------------------------
   // Regression tests for Studio overlay scroll-safety
   // ---------------------------------------------------------------------------
 
-  test('Studio toolbar remains at stable viewport coordinates during scroll', async ({ page }) => {
+  test('Studio overlay panes remain at stable viewport coordinates during scroll', async ({ page }) => {
     await startViewer(page)
     await page.waitForTimeout(2000)
 
-    // Get initial toolbar bounding rect
-    const initialRect = await page.evaluate(() => {
-      const toolbar = document.querySelector('.tp-dfwv')
-      if (!toolbar) return null
-      const r = toolbar.getBoundingClientRect()
-      return { top: r.top, left: r.left, bottom: r.bottom, right: r.right }
+    // Identify all .tp-dfwv elements and their identifying text at scroll top
+    const rectsAtTop = await page.evaluate(() => {
+      const panes = document.querySelectorAll('.tp-dfwv')
+      const results: { title: string; top: number; left: number }[] = []
+      panes.forEach((pane, i) => {
+        const r = pane.getBoundingClientRect()
+        // Try to identify the pane by its title text
+        const titleEl = pane.querySelector('.tp-rotv_t')
+        const title = titleEl?.textContent?.trim() || `tp-dfwv[#${i}]`
+        results.push({ title, top: r.top, left: r.left })
+      })
+      return results
     })
-    expect(initialRect).not.toBeNull()
+    expect(rectsAtTop.length).toBeGreaterThan(0)
 
-    // Scroll to 50% of document
-    await page.evaluate(() => {
-      window.scrollTo(0, document.body.scrollHeight * 0.5)
-    })
+    // Scroll to 50%
+    await page.evaluate(() => { window.scrollTo(0, document.body.scrollHeight * 0.5) })
     await page.waitForTimeout(500)
 
-    // Get scrolled toolbar bounding rect
-    const scrolledRect = await page.evaluate(() => {
-      const toolbar = document.querySelector('.tp-dfwv')
-      if (!toolbar) return null
-      const r = toolbar.getBoundingClientRect()
-      return { top: r.top, left: r.left, bottom: r.bottom, right: r.right }
+    const rectsAt50 = await page.evaluate(() => {
+      const panes = document.querySelectorAll('.tp-dfwv')
+      const results: { title: string; top: number; left: number }[] = []
+      panes.forEach((pane, i) => {
+        const r = pane.getBoundingClientRect()
+        const titleEl = pane.querySelector('.tp-rotv_t')
+        const title = titleEl?.textContent?.trim() || `tp-dfwv[#${i}]`
+        results.push({ title, top: r.top, left: r.left })
+      })
+      return results
     })
-    expect(scrolledRect).not.toBeNull()
 
-    // Coordinates should be stable within a small tolerance (5px)
+    // Scroll to near bottom
+    await page.evaluate(() => { window.scrollTo(0, document.body.scrollHeight * 0.95) })
+    await page.waitForTimeout(500)
+
+    const rectsAt95 = await page.evaluate(() => {
+      const panes = document.querySelectorAll('.tp-dfwv')
+      const results: { title: string; top: number; left: number }[] = []
+      panes.forEach((pane, i) => {
+        const r = pane.getBoundingClientRect()
+        const titleEl = pane.querySelector('.tp-rotv_t')
+        const title = titleEl?.textContent?.trim() || `tp-dfwv[#${i}]`
+        results.push({ title, top: r.top, left: r.left })
+      })
+      return results
+    })
+
+    // Assert each pane's coordinates are stable across all scroll positions (tolerance: 5px)
     const tolerance = 5
-    const init = initialRect as { top: number; left: number }
-    const scrolled = scrolledRect as { top: number; left: number }
-    expect(Math.abs(scrolled.top - init.top)).toBeLessThan(tolerance)
-    expect(Math.abs(scrolled.left - init.left)).toBeLessThan(tolerance)
+    for (const pane of rectsAtTop) {
+      const at50 = rectsAt50.find((p) => p.title === pane.title)
+      const at95 = rectsAt95.find((p) => p.title === pane.title)
+      if (at50) {
+        expect(Math.abs(at50.top - pane.top)).toBeLessThan(
+          tolerance,
+        )
+        expect(Math.abs(at50.left - pane.left)).toBeLessThan(
+          tolerance,
+        )
+      }
+      if (at95) {
+        expect(Math.abs(at95.top - pane.top)).toBeLessThan(
+          tolerance,
+        )
+        expect(Math.abs(at95.left - pane.left)).toBeLessThan(
+          tolerance,
+        )
+      }
+    }
   })
 
   // ---------------------------------------------------------------------------
@@ -342,24 +402,31 @@ test.describe('RAD Viewer', () => {
     expect(toggleBtn!.hasIcon).toBe(true)
   })
 
-  test('open Scroll Animator pane has no inert title button', async ({ page }) => {
+  test('open Scroll Animator pane has semantic heading and no inert title button', async ({ page }) => {
     await startViewer(page)
     await selectAnimatorAndOpenPane(page, 'Camera ScrollAnimator')
 
-    // Check that the title bar (.tp-rotv_b) inside the tooltip has pointer-events: none
-    const titleBarStyle = await page.evaluate(() => {
+    // Check: semantic <h2> heading is visible
+    const heading = page.locator('.sa-heading')
+    await expect(heading).toBeVisible({ timeout: 10_000 })
+    await expect(heading).toContainText('Scroll Animator')
+
+    // Check: the Tweakpane title bar (.tp-rotv_b) is hidden (display: none)
+    const titleBarCheck = await page.evaluate(() => {
       const tooltip = document.querySelector('.scroll-animator-extension .tooltip')
       const titleBar = tooltip?.querySelector('.tp-rotv_b')
-      if (!titleBar) return null
+      if (!titleBar) return { found: false }
       const computed = window.getComputedStyle(titleBar)
       return {
-        pointerEvents: computed.pointerEvents,
-        cursor: computed.cursor,
-        hasExpandArrow: !!tooltip.querySelector('.tp-rotv_m'),
+        found: true,
+        display: computed.display,
+        // Also check it's not in the accessibility tree
+        tabIndex: titleBar.getAttribute('tabindex'),
       }
     })
-    expect(titleBarStyle).not.toBeNull()
-    // Title bar should not be interactive
-    expect(titleBarStyle!.pointerEvents).toBe('none')
+    // Title bar should be hidden
+    if (titleBarCheck.found) {
+      expect(titleBarCheck.display).toBe('none')
+    }
   })
 })

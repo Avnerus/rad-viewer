@@ -14,9 +14,9 @@ import {
 
 function makeMockControls(overrides: Partial<EditorCameraControlsLike> = {}): EditorCameraControlsLike {
   return {
-    smoothTime: 0.25,
-    draggingSmoothTime: 0.18,
-    dollyToCursor: false,
+    smoothTime: 0.05,
+    draggingSmoothTime: 0.05,
+    dollyToCursor: true,
     ...overrides,
   }
 }
@@ -29,10 +29,10 @@ describe('editorCameraControlsBridge', () => {
   })
 
   describe('DEFAULT_EDITOR_CAMERA_CONTROLS_TUNING', () => {
-    it('has expected default values', () => {
-      expect(DEFAULT_EDITOR_CAMERA_CONTROLS_TUNING.smoothTime).toBe(0.25)
-      expect(DEFAULT_EDITOR_CAMERA_CONTROLS_TUNING.draggingSmoothTime).toBe(0.18)
-      expect(DEFAULT_EDITOR_CAMERA_CONTROLS_TUNING.dollyToCursor).toBe(false)
+    it('matches installed Studio defaults (0.05, 0.05, true)', () => {
+      expect(DEFAULT_EDITOR_CAMERA_CONTROLS_TUNING.smoothTime).toBe(0.05)
+      expect(DEFAULT_EDITOR_CAMERA_CONTROLS_TUNING.draggingSmoothTime).toBe(0.05)
+      expect(DEFAULT_EDITOR_CAMERA_CONTROLS_TUNING.dollyToCursor).toBe(true)
     })
   })
 
