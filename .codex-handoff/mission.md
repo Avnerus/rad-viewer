@@ -1,137 +1,140 @@
-# Follow-up Mission: Fix Scroll Animator Opening Below the Viewport
+# Follow-up Mission: Harden FixedToolbarPane Positioning and Verification
 
 ## Objective
 
-Fix the newly reproduced Scroll Animator dropdown-positioning bug: if the document is already scrolled, opening the Scroll Animator pane places it below the viewport instead of beneath the fixed toolbar. Preserve all completed camera, animation, Studio, Spark, and accessibility work. Add the missing open-after-scroll regression coverage and keep the final verification report precise about which interactions and panes were actually tested.
+Preserve the working scroll-first-open fix in `FixedToolbarPane.svelte`, but make its update lifecycle match the claims and close the remaining test/report gaps. The pane currently opens correctly after scrolling; this pass must ensure it also stays correctly anchored through viewport resize, layout shifts, and panel content-size changes, with strict viewport assertions and complete pane identity coverage.
 
-## Confirmed Root Cause
+## Verified Remaining Issues
 
-Installed Studio `DropDownPane.svelte` has an internal coordinate-strategy mismatch:
+1. `FixedToolbarPane` imports only `computePosition` and installs a `ResizeObserver` on the anchor. An anchor resize observer does **not** detect:
+   - window/visual viewport resize when the anchor's size stays constant but position changes;
+   - ancestor layout or toolbar item movement;
+   - panel content-size changes;
+   - other reference/floating element layout shifts.
 
-- its `.tooltip` element is CSS `position: fixed`;
-- it calls Floating UI `computePosition(ref, tooltipEl, ...)` without a `strategy`;
-- Floating UI therefore uses its default `strategy: 'absolute'` and returns document/absolute coordinates;
-- after the page has scrolled, the returned `y` includes the document scroll offset;
-- that document Y is assigned as `top` on a fixed-position element, pushing it below the viewport.
+   The status says the pane updates on resize/layout changes, but the implementation does not robustly do so. Floating UI's `autoUpdate` exists for this lifecycle.
 
-The previous test missed this because it opened the tooltip at scroll 0 and then scrolled while the already-positioned fixed tooltip remained open. The failure requires this sequence: **scroll first, then open**.
+2. `rafId` is never assigned. It is dead state/cleanup. The asynchronous `computePosition(...).then(...)` also has no identity/open guard, so a result from a closed/old panel can theoretically apply to a newly opened panel.
 
-The `.tp-dfwv { position: fixed }` rule cannot fix this: the Scroll Animator tooltip is an inline `DropDownPane` tooltip, not a `.tp-dfwv` root.
+3. The panel uses `role="menu"` but contains a heading, number input, ordinary buttons, and other form-like content rather than a menu/menuitem structure. Use an appropriate nonmodal dialog/region semantic with a real label relationship.
+
+4. The scroll-first tests do not strictly prove viewport intersection:
+   - the top test accepts `panel bottom < 10000`;
+   - later tests hard-code `800` rather than using the actual Playwright viewport height;
+   - they do not assert horizontal viewport intersection or anchor-relative placement.
+
+5. No test covers an already-open panel during scroll, viewport resizing, toolbar movement, or content resizing, despite the acceptance/status claims.
+
+6. The fixed-pane expected set still excludes Inspector and Default Camera. The report says those identities cannot silently disappear, but they are not expected or tested. The overlay setup also uses evaluate-based DOM clicks for Static State/Inspector while claiming all stub e2e clicks are native.
 
 ## Files Likely Involved
 
-- `src/lib/studio/scroll-animator/ScrollAnimatorExtension.svelte`
-- A new local public-API component such as `src/lib/studio/scroll-animator/FixedToolbarPane.svelte`
-- `src/app.css` for removal of obsolete DropDownPane-specific overrides
+- `src/lib/studio/scroll-animator/FixedToolbarPane.svelte`
 - `tests/e2e/rad-viewer.spec.ts`
-- `package.json` and `package-lock.json` only if the app imports `@floating-ui/dom` directly
 - `AGENTS.md`
 - `.codex-handoff/status.md` as the final write
 
-## Detailed Design
+Avoid production changes outside `FixedToolbarPane.svelte` unless a narrow stable test/accessibility hook is genuinely needed.
 
-### 1. Replace the unconfigurable Studio dropdown locally
+## Required Changes
 
-Studio's public `DropDownPane` does not expose Floating UI's `strategy`, so do not patch `node_modules`, deep-import its internals, or compensate with a hard-coded `top` value.
+### 1. Use Floating UI's complete positioning lifecycle
 
-Preferred solution: create a small local fixed toolbar-pane component using only public Studio UI exports plus Floating UI:
+Replace the anchor-only `ResizeObserver` and unused RAF state with `autoUpdate` from the already direct `@floating-ui/dom` dependency.
 
-- Use public `ToolbarButton` (inside the existing `ToolbarItem`) for the animation icon and toggle.
-- Give the toggle a descriptive accessible label such as `Scroll Animator`, not the generic `Toggle Pane`; expose its open state when the public component API permits.
-- Render the panel as `position: fixed` with a stable class/test marker and an appropriate accessible role/name.
-- Position it with the matching fixed strategy:
+Recommended shape:
 
 ```ts
-computePosition(anchor, panel, {
-  strategy: 'fixed',
-  placement: 'bottom',
-  middleware: [offset(2), flip(), shift({ padding: 6 })],
-})
+import { autoUpdate, computePosition, flip, offset, shift } from '@floating-ui/dom'
+import { tick } from 'svelte'
+
+let stopAutoUpdate: (() => void) | undefined
+
+async function openPanel() {
+  open = true
+  await tick()
+  if (!open || !anchorEl || !panelEl) return
+  stopAutoUpdate?.()
+  stopAutoUpdate = autoUpdate(anchorEl, panelEl, updatePosition)
+}
+
+function closePanel() {
+  open = false
+  stopAutoUpdate?.()
+  stopAutoUpdate = undefined
+}
 ```
 
-- Use `autoUpdate(anchor, panel, updatePosition)` while open, or equivalently install and clean up scroll/resize/layout observers. Position must update after opening, viewport resizing, toolbar movement, and content-size changes.
-- Clean up every observer/listener when closed and on destroy.
-- Close on outside pointer interaction and Escape. Keep toggle open/close behavior deterministic.
-- Preserve the semantic `<h2>Scroll Animator</h2>`; do not recreate a generated inert title button.
-- Keep the panel within the viewport. If content can exceed viewport height, give the panel a viewport-relative `max-height` and internal overflow scrolling rather than allowing controls to become unreachable.
-- Preserve the `mdiAnimationOutline` icon and current panel contents/behavior.
+- Keep `strategy: 'fixed'` in every `computePosition` call.
+- Let `autoUpdate` cover ancestor scroll/resize, element resize for both anchor and panel, and layout shift. Use its defaults unless a measured browser issue requires a narrowly documented option.
+- Make `updatePosition` immune to stale async results: capture the current panel/anchor and apply only if the pane is still open and the element identities are unchanged.
+- Remove unused `rafId`, manual `ResizeObserver`, and redundant cleanup.
+- Cleanup must be idempotent on close and destroy. Repeated open/close/remount must not accumulate observers/listeners.
+- Preserve body portal, outside pointer close, Escape close, fixed strategy, flip/shift behavior, icon, and max-height overflow.
 
-If importing `@floating-ui/dom` directly in application code, add it as an explicit direct dependency at the installed compatible version and update the lockfile. Do not rely on Studio's transitive dependency.
+### 2. Correct panel accessibility semantics
 
-An alternative local implementation is acceptable only if it uses viewport coordinates consistently, responds to resize/layout changes, is accessible, and does not depend on Studio private DOM internals. Do not use `top: 62px !important`, subtract `window.scrollY` after Studio positions the panel, or mutate the dependency-owned tooltip from outside.
+- Replace `role="menu"` with a suitable nonmodal dialog or labelled region. `role="dialog"` with `aria-labelledby` referencing the semantic `<h2>` is appropriate for this interactive authoring panel.
+- Give the heading a stable unique `id`; do not rely only on a duplicate `aria-label`.
+- Keep the toolbar button's descriptive accessible name `Scroll Animator` and active state.
+- On Escape, preserve/restore sensible focus to the toolbar toggle if necessary. Do not introduce a modal focus trap for a nonmodal Studio pane.
+- Keep outside-pointer interaction functional for panel controls and the toggle itself.
 
-### 2. Remove obsolete CSS and selectors
+### 3. Make viewport and anchoring tests exact
 
-- Once the Studio `DropDownPane` is no longer used for Scroll Animator, remove the `.scroll-animator-extension .tooltip .tp-rotv_b/.tp-rotv_m` workaround if it is obsolete.
-- Keep the global `.tp-dfwv` fixed-root rule for Studio's actual fixed panes.
-- Use owned semantic class/data selectors for the new panel and tests. Avoid selectors coupled to private Tweakpane classes for the Scroll Animator panel.
+Create a helper that reads the actual viewport (`window.innerWidth/innerHeight` or `page.viewportSize()`) and asserts:
 
-### 3. Add the regression that reproduces the real bug
+- `panel.left >= 0` and `panel.top >= 0`;
+- `panel.right <= viewport width` and `panel.bottom <= viewport height`, with a small rounding tolerance;
+- the panel is near the toolbar button according to the resolved placement (normally button bottom + offset, but allow Floating UI flip/shift on short viewports);
+- the panel is not merely under an arbitrary constant.
 
-Add native Playwright tests with the Spark stub for all of these sequences:
+Retain separate scroll-first-open tests for 0%, 50%, and 95%, but compare viewport/anchor rectangles using this helper. Remove `<10000` and hard-coded `<800` assertions.
 
-1. At scroll 0, open the pane; assert it is visible, intersects the viewport, and is anchored beneath/near the toolbar button.
-2. Close it, scroll to 50%, then open it; assert its viewport `top` is near the same anchor-relative location—not offset by `scrollY` and not below the viewport.
-3. Close it, scroll near 95%, then open it; assert the same.
-4. While it is open, scroll and resize; assert it stays anchored and visible.
-5. Verify Escape and outside click close it and cleanup does not cause errors on remount.
+Add tests for:
 
-Use native Playwright `.click()` in these stub e2e tests. Do not invoke the toggle via `page.evaluate(...element.click())`, `dispatchEvent`, `{ force: true }`, or optional fallbacks. The test must exercise hit testing/actionability.
+1. Open at top, then scroll while still open; assert it remains anchored/in viewport.
+2. Resize the Playwright viewport while open so the toolbar/panel must reposition; assert updated anchoring/in-viewport coordinates.
+3. Change panel content size while open (for example select/deselect a ScrollAnimator or otherwise use a deterministic content seam); assert auto-update keeps it in viewport.
+4. Repeat open/close and viewer remount; assert one panel only and no listener/observer errors.
+5. Escape and outside pointer closure using native Playwright input.
 
-The critical assertion is opening **after** scrolling. A test that only opens at the top and then scrolls is insufficient.
+### 4. Complete explicit pane identity tests and report clicks accurately
 
-### 4. Retain strict fixed-pane coverage without overclaiming
-
-Preserve the prior hard presence checks, but use an explicit expected set rather than deriving expectations solely from whatever happens to be open at baseline. A failed attempt to open Inspector must not remove Inspector from the expected list and let the test pass.
-
-- In automated stub e2e, explicitly open and test toolbar, Scene Hierarchy, Inspector, Static State, Scroll Animator, and Default Camera where the installed build exposes them.
-- If overlapping/transient dropdowns cannot remain open together, use separate focused tests rather than weakening identity checks.
-- Keep required `.find()`/map lookups non-optional.
-- Accurately distinguish native `.click()` calls from DOM clicks in evaluation. The current status says all automated controls use native clicks even though the overlay setup uses `btn?.click()` in `page.evaluate()`; correct either the tests or the claim.
-
-### 5. Real Baby Yoda verification
-
-Use `https://avner.us/baby_yoda-lod.rad` and reproduce the user's exact sequence:
-
-1. Start at scroll top and confirm the panel opens in view.
-2. Close it.
-3. Scroll to 50%, open it, and record button/panel viewport rectangles.
-4. Close it, scroll near the bottom, open it, and record again.
-5. Confirm percentage input, keyframes, save/delete controls, and panel scrolling remain reachable.
-
-Attempt normal pointer interaction first. If real WebGL automation stalls, report that separately; synthetic dispatch may diagnose handler execution but is not pointer evidence.
+- In stub e2e, use native Playwright selection of `Camera ScrollAnimator`—the existing helper already demonstrates hierarchy selection works—then explicitly require `Inspector`.
+- Open editor-camera mode and its Default Camera option through native locators and explicitly test the outer `.draggable-container`/Default Camera preview in its own focused test if simultaneous overlay state is impractical.
+- Open Static State with native Playwright `.click()` where stub e2e supports it.
+- It is acceptable to use multiple tests rather than keep transient dropdowns simultaneously open. It is not acceptable to exclude Inspector/Default Camera while saying all identities are covered.
+- Keep explicit expected names; do not derive the full expected set from whatever happens to render.
+- Update the report to enumerate which interactions use native Playwright input. Do not say “all use native” if any relevant setup still calls DOM `.click()` inside `evaluate()`.
 
 ## Constraints
 
-- Do not patch or deep-import `@threlte/studio`, `svelte-tweakpane-ui`, or their built files.
-- Do not use a hard-coded viewport top/left correction or manual `scrollY` subtraction against dependency-owned DOM.
-- Do not change ScrollAnimator interpolation, keyframes, runtime bridge, source synchronization, or transaction guard.
-- Do not change GSAP/ScrollTrigger or its on-scroll-only transform updates.
-- Do not change declarative camera ownership, CameraTarget look-at, CameraControls defaults/bridge, Spark renderers/LOD, or the user's URL-only origin `SparkSplats` API.
-- Do not reintroduce free navigation.
-- Do not broadly restyle unrelated Studio/Tweakpane UI.
-- Do not weaken tests or infer untested panes from a shared CSS class.
+- Preserve the local `FixedToolbarPane`, body portal, `strategy: 'fixed'`, direct Floating UI dependency, animation icon, semantic heading, scroll-first-open behavior, and overflow scrolling.
+- Do not restore Studio `DropDownPane` or patch/deep-import dependencies.
+- Do not use hard-coded top corrections, `window.scrollY` subtraction, polling loops, or permanent animation-frame positioning.
+- Do not change ScrollAnimator keyframes/interpolation/runtime/source-sync, GSAP ScrollTrigger, camera hierarchy/look-at, CameraControls bridge, Spark rendering/LOD, or SparkSplats API/origin.
+- Do not reintroduce free navigation or broadly restyle Studio.
+- Do not weaken assertions or convert native stub interactions to synthetic DOM events.
 
 ## Acceptance Criteria
 
-- [ ] Opening Scroll Animator after scrolling to 50% or near the bottom places the entire panel within the viewport near its fixed toolbar anchor.
-- [ ] Panel positioning uses a consistent fixed coordinate strategy and updates on open, scroll, resize, and layout/content changes.
-- [ ] No Studio/dependency private code is patched or deep-imported; any direct Floating UI use is declared as a direct dependency.
-- [ ] Toggle has the animation icon, descriptive accessible name, native open/close behavior, outside-click behavior, and Escape behavior.
-- [ ] The semantic heading remains and no inert title button returns.
-- [ ] Panel content remains reachable on short viewports through max-height/overflow handling.
-- [ ] Automated tests explicitly cover scroll-first-then-open at top/50%/95%, plus open-while-scroll/resize.
-- [ ] Related stub e2e toggle interactions use native Playwright clicks.
-- [ ] Fixed-pane expected identities are explicit; Inspector/Default Camera cannot silently disappear from expectations.
-- [ ] Real Baby Yoda verification reproduces the user's sequence and records button/panel rectangles.
-- [ ] Existing camera, ScrollAnimator, Spark, Studio source-sync, and fixed-pane behavior remains intact.
-- [ ] `AGENTS.md` documents the local fixed dropdown, positioning strategy, test contract, and direct dependency if added.
+- [ ] `autoUpdate` owns the open panel's positioning lifecycle and is cleaned up exactly once/idempotently on close/destroy.
+- [ ] Anchor scroll/resize/layout movement and panel content resizing all trigger correct fixed-strategy repositioning.
+- [ ] No unused RAF/observer state or stale async position result can affect a closed/new panel.
+- [ ] Panel uses valid labelled dialog/region semantics for its mixed interactive content.
+- [ ] Top/50%/95% tests assert against actual viewport width/height and anchor geometry.
+- [ ] Tests cover already-open scrolling, viewport resize, content resize, repeated open/close/remount, Escape, and outside pointer.
+- [ ] Inspector and Default Camera are explicitly opened, identified, and viewport-position tested in stub e2e (separate focused tests allowed).
+- [ ] Relevant stub e2e controls use native Playwright input; status accurately identifies any remaining evaluate-based interactions.
+- [ ] Existing production behavior and all prior fixes remain intact.
+- [ ] `AGENTS.md` describes `autoUpdate`, fixed strategy, dialog semantics, and the full regression contract accurately.
 
-Re-check every acceptance item before finalizing. Do not mark handler-level synthetic events as native pointer success and do not mark inferred panes as verified.
+Re-check every acceptance item before finalizing. Do not mark untested update triggers or panes complete.
 
 ## Tests to Run
 
-Add the new regression tests and run:
+Add/update tests, then run:
 
 ```bash
 npm run check
@@ -141,41 +144,40 @@ npm run test:e2e
 npm run build
 ```
 
-Also perform the real-browser scroll-first-then-open sequence with the lightweight Baby Yoda RAD.
+Use `https://avner.us/baby_yoda-lod.rad` for a final real-browser scroll-first-open and resize check. Native pointer limitations in real headless WebGL must remain separate from stub e2e evidence.
 
 ## Things Pi Must Not Change
 
-- The working declarative default camera and editor-camera switching.
-- CameraTarget hierarchy/look-at behavior.
-- ScrollAnimator schema, interpolation, playback, authoring, and source-write guard.
-- CameraControls bridge values or attachment semantics.
-- Spark dual-renderer/LOD routing and SparkSplats origin/API simplification.
-- Unrelated application UI, dependencies, configuration, and tests.
+- ScrollAnimator data, animation, source synchronization, or transaction guard.
+- Default/editor camera and CameraTarget behavior.
+- CameraControls tuning bridge.
+- Spark renderer/LOD architecture or SparkSplats simplification.
+- Unrelated UI, configuration, dependencies, and tests.
 
 ## AGENTS.md Update
 
-Update `AGENTS.md` concisely with:
+Update the existing FixedToolbarPane section concisely:
 
-- why Studio's `DropDownPane` was unsuitable on a scrollable document (absolute calculation applied to fixed tooltip);
-- the local component/source reference and `strategy: 'fixed'`/auto-update invariant;
-- the required scroll-first-then-open regression sequence;
-- accurate native-versus-synthetic pointer guidance.
+- positioning uses `strategy: 'fixed'` plus `autoUpdate` for ancestor scroll/resize, element resize, and layout shifts;
+- cleanup and stale-result guard are required invariants;
+- panel is a labelled nonmodal dialog/region, not an ARIA menu;
+- tests use actual viewport geometry and cover scroll-first-open, open-while-scroll, resize, and content changes.
 
-Do not add a chronological implementation log.
+Do not add a chronological log.
 
 ## Expected Completion Report
 
 Write `.codex-handoff/status.md` with:
 
 1. Summary and commits.
-2. Files changed and dependency changes.
-3. Root cause and chosen public/local implementation.
-4. Lifecycle/accessibility/viewport-overflow behavior.
-5. Automated scroll-first-open evidence with button/panel rectangles at top/50%/95% and resize.
-6. Explicit fixed-pane identity results, including Inspector and Default Camera.
-7. Native pointer versus synthetic diagnostic results stated accurately.
-8. Real Baby Yoda reproduction results.
-9. Exact automated test results.
+2. Files changed.
+3. Positioning lifecycle before/after, including cleanup and stale-result handling.
+4. Accessibility semantics.
+5. Exact viewport/anchor evidence for top/50%/95%, open-scroll, resize, and content resizing.
+6. Inspector and Default Camera results.
+7. Native versus evaluate interaction inventory.
+8. Real Baby Yoda result.
+9. Exact automated check outputs.
 10. Acceptance audit and remaining risks.
 
 Always write `status.md` as the **last action** before committing and pushing. After writing it, do not run verification, modify documentation, or make any other changes. Commit all work and push the current branch.
