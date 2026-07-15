@@ -646,10 +646,85 @@ test.describe('RAD Viewer', () => {
     await expect(page.locator('.sa-panel-tooltip')).not.toBeVisible()
   })
 
-  test('Scroll Animator panel closes on outside click', async ({ page }) => {
+  // ---------------------------------------------------------------------------
+  // Persistent pane: selection switching without close
+  // ---------------------------------------------------------------------------
+
+  test('Scroll Animator pane stays open when switching between animators', async ({ page }) => {
     await startViewer(page)
     await page.waitForTimeout(2000)
 
+    // 1. Select Camera ScrollAnimator and open pane
+    await page.getByText('Camera ScrollAnimator').click()
+    await page.waitForTimeout(500)
+    await page.getByRole('button', { name: 'Scroll Animator' }).click()
+    await page.waitForTimeout(500)
+
+    const panel = page.locator('.sa-panel-tooltip')
+    await expect(panel).toBeVisible({ timeout: 10_000 })
+    const animatorName = page.locator('.sa-animator-name')
+    await expect(animatorName).toContainText('Camera ScrollAnimator')
+
+    const cameraKfCount = await page.locator('.sa-kf-row').count()
+    expect(cameraKfCount).toBe(2)
+
+    // 2. Select Camera Target ScrollAnimator — pane must stay open
+    await page.getByText('Camera Target ScrollAnimator').click()
+    await page.waitForTimeout(500)
+
+    // Same panel still visible
+    await expect(panel).toBeVisible()
+    const panelCount = await page.evaluate(() => document.querySelectorAll('.sa-panel-tooltip').length)
+    expect(panelCount).toBe(1)
+
+    // Content updated to target animator
+    await expect(animatorName).toContainText('Camera Target ScrollAnimator')
+
+    const targetKfCount = await page.locator('.sa-kf-row').count()
+    expect(targetKfCount).toBe(1) // Camera Target ScrollAnimator has 1 keyframe
+  })
+
+  test('Scroll Animator pane stays open when selecting non-ScrollAnimator', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(2000)
+
+    // 1. Open with Camera ScrollAnimator
+    await page.getByText('Camera ScrollAnimator').click()
+    await page.waitForTimeout(500)
+    await page.getByRole('button', { name: 'Scroll Animator' }).click()
+    await page.waitForTimeout(500)
+
+    await expect(page.locator('.sa-animator-name')).toContainText('Camera ScrollAnimator')
+
+    // 2. Switch to Camera Target ScrollAnimator — pane stays open, content updates
+    await page.locator('tree-view').getByText('Camera Target ScrollAnimator').click()
+    await page.waitForTimeout(500)
+    await expect(page.locator('.sa-animator-name')).toContainText('Camera Target ScrollAnimator')
+
+    // 3. Deselect by Ctrl+clicking the same item in hierarchy (toggles off selection)
+    await page.keyboard.down('Control')
+    await page.locator('tree-view').getByText('Camera Target ScrollAnimator').click()
+    await page.keyboard.up('Control')
+    await page.waitForTimeout(500)
+
+    const panel = page.locator('.sa-panel-tooltip')
+    await expect(panel).toBeVisible()
+    const noSelection = page.locator('.sa-no-selection')
+    await expect(noSelection).toBeVisible()
+    await expect(noSelection).toContainText('Select one ScrollAnimator')
+
+    // 4. Return to Camera ScrollAnimator — content repopulates
+    await page.locator('tree-view').getByText('Camera ScrollAnimator').click()
+    await page.waitForTimeout(500)
+    await expect(page.locator('.sa-animator-name')).toContainText('Camera ScrollAnimator')
+    expect(await page.locator('.sa-kf-row').count()).toBe(2)
+  })
+
+  test('Scroll Animator pane stays open when clicking outside (canvas)', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(2000)
+
+    // Open pane
     await page.getByRole('button', { name: 'Scroll Animator' }).click()
     await page.waitForTimeout(500)
     await expect(page.locator('.sa-panel-tooltip')).toBeVisible()
@@ -657,7 +732,70 @@ test.describe('RAD Viewer', () => {
     // Click on the canvas area (outside the panel)
     await page.locator('#app canvas').click({ position: { x: 400, y: 300 } })
     await page.waitForTimeout(300)
+
+    // Panel should STILL be visible (persistent pane)
+    await expect(page.locator('.sa-panel-tooltip')).toBeVisible()
+  })
+
+  test('Scroll Animator pane closes via toolbar toggle', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(2000)
+
+    await page.getByRole('button', { name: 'Scroll Animator' }).click()
+    await page.waitForTimeout(500)
+    await expect(page.locator('.sa-panel-tooltip')).toBeVisible()
+
+    // Close via toggle
+    await page.getByRole('button', { name: 'Scroll Animator' }).click()
+    await page.waitForTimeout(300)
     await expect(page.locator('.sa-panel-tooltip')).not.toBeVisible()
+  })
+
+  test('Scroll Animator pane closes on Escape and restores focus to toggle button', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(2000)
+
+    await page.getByRole('button', { name: 'Scroll Animator' }).click()
+    await page.waitForTimeout(500)
+    await expect(page.locator('.sa-panel-tooltip')).toBeVisible()
+
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(300)
+    await expect(page.locator('.sa-panel-tooltip')).not.toBeVisible()
+
+    // Focus should be on the Scroll Animator toolbar button
+    const focusedBtn = await page.evaluate(() => {
+      const btn = document.activeElement
+      return btn ? { tag: btn.tagName, ariaLabel: btn.getAttribute('aria-label') } : null
+    })
+    expect(focusedBtn!.ariaLabel).toBe('Scroll Animator')
+  })
+
+  test('Scroll Animator persistent pane works at nonzero scroll', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(2000)
+
+    // Scroll to 50%
+    await page.evaluate(() => { window.scrollTo(0, document.body.scrollHeight * 0.5) })
+    await page.waitForTimeout(1000)
+
+    // Open pane
+    await page.getByRole('button', { name: 'Scroll Animator' }).click()
+    await page.waitForTimeout(500)
+    await expect(page.locator('.sa-panel-tooltip')).toBeVisible()
+
+    // Switch selection
+    await page.getByText('Camera Target ScrollAnimator').click()
+    await page.waitForTimeout(500)
+
+    // Panel still visible and in viewport
+    const panel = page.locator('.sa-panel-tooltip')
+    await expect(panel).toBeVisible()
+    await expect(page.locator('.sa-animator-name')).toContainText('Camera Target ScrollAnimator')
+
+    const rect = await panel.boundingBox()
+    expect(rect).not.toBeNull()
+    await assertInViewport(page, rect!)
   })
 
   // ---------------------------------------------------------------------------

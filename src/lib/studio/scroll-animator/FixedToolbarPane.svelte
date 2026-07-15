@@ -63,34 +63,27 @@
     else openPanel()
   }
 
+  // Focus the actual toolbar button inside the anchor wrapper
+  function focusToggle(): void {
+    anchorEl?.querySelector<HTMLButtonElement>('button')?.focus()
+  }
+
   // Close on Escape — return focus to the toggle button
   function handleKeydown(e: KeyboardEvent): void {
     if (e.key === 'Escape' && open) {
       closePanel()
-      anchorEl?.focus()
+      focusToggle()
     }
-  }
-
-  // Close on outside pointer interaction (capture phase for reliability with canvas overlay)
-  function handlePointerDown(e: PointerEvent): void {
-    if (!open) return
-    if (!anchorEl || !panelEl) return
-    if (anchorEl.contains(e.target as Node)) return
-    if (panelEl.contains(e.target as Node)) return
-    closePanel()
   }
 
   onMount(() => {
     document.addEventListener('keydown', handleKeydown)
-    document.addEventListener('pointerdown', handlePointerDown, true)
   })
 
   onDestroy(() => {
     document.removeEventListener('keydown', handleKeydown)
-    document.removeEventListener('pointerdown', handlePointerDown, true)
     stopAutoUpdate?.()
     stopAutoUpdate = undefined
-    closePanel()
   })
 </script>
 

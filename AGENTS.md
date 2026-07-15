@@ -74,7 +74,7 @@ Registered via `<Studio extensions={[ScrollAnimatorExtension]}>`. Uses public `u
 
 Active only for exactly one selected `ScrollAnimator`; otherwise shows "Select one ScrollAnimator". When source sync is unavailable, a warning is shown but percentage navigation and keyframe jumps remain functional.
 
-**Lifecycle:** Panel closes on Escape key (returns focus to toggle) and outside pointer interaction (capture phase). `autoUpdate` is cleaned up idempotently on close and destroy. The panel uses `role="dialog"` with `aria-modal="false"` and `aria-labelledby` referencing the semantic heading — not `role="menu"` — because its content (heading, number input, buttons) is form-like rather than a menu/menuitem structure.
+**Lifecycle:** The Scroll Animator pane is a persistent nonmodal authoring pane. It closes only via the toolbar toggle or Escape key (which restores focus to the actual toggle button). Outside pointer interactions — hierarchy selection, Inspector, canvas clicks, transform controls — do not close it. Selection changes update the pane content in place: switching between ScrollAnimators updates the name and keyframes; selecting a non-ScrollAnimator, multiple objects, or no object shows the neutral "Select one ScrollAnimator" state. `autoUpdate` is cleaned up idempotently on close and destroy. The panel uses `role="dialog"` with `aria-modal="false"` and `aria-labelledby` referencing the semantic heading — not `role="menu"` — because its content (heading, number input, buttons) is form-like rather than a menu/menuitem structure.
 
 ## Source-Sync Guard Invariant
 
