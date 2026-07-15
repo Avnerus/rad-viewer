@@ -5,9 +5,6 @@
 
   let {
     url,
-    position = [0, 0, 0] as [number, number, number],
-    rotation = [0, 0, 0] as [number, number, number],
-    scale = 1 as number | [number, number, number],
   } = $props()
 
   let mesh: SplatMesh | null = $state(null)
@@ -31,5 +28,5 @@
 
 <!-- SplatMesh is owned by Threlte <T> for declarative transforms. SparkRenderer is managed by SparkStudioBridge. -->
 {#if mesh}
-  <T is={mesh} {position} {rotation} {scale} />
+  <T is={mesh} />
 {/if}

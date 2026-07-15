@@ -173,7 +173,6 @@
 
 <SparkSplats
   {url}
-  position={[5,-6,-5]}
 />
 
 <!-- Visually hidden debug element for e2e tests -->
