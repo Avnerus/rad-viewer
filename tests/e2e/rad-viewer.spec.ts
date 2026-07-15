@@ -305,78 +305,108 @@ test.describe('RAD Viewer', () => {
   // Regression tests for Studio overlay scroll-safety
   // ---------------------------------------------------------------------------
 
+  /**
+   * Helper: capture viewport rects of all opened Studio overlay panes,
+   * keyed by a unique identifier (title or aria-label).
+   * Returns a Map<id, { top, left, width }>. Panes with zero width are
+   * excluded (closed/hidden).
+   */
+  async function captureOverlayRects(page: import('@playwright/test').Page) {
+    return page.evaluate(() => {
+      const results: Record<string, { top: number; left: number; width: number }> = {}
+
+      // All .tp-dfwv panes (toolbar, Scene Hierarchy, Inspector, Static State)
+      const dfwvPanes = document.querySelectorAll('.tp-dfwv')
+      dfwvPanes.forEach((el) => {
+        const r = el.getBoundingClientRect()
+        if (r.width === 0) return // skip hidden
+        const titleEl = el.querySelector('.tp-rotv_t')
+        const id = titleEl?.textContent?.trim() || 'unknown-tp-dfwv'
+        results[id] = { top: r.top, left: r.left, width: r.width }
+      })
+
+      // Scroll Animator tooltip (not .tp-dfwv, uses .tooltip)
+      const saTooltip = document.querySelector('.scroll-animator-extension .tooltip')
+      if (saTooltip) {
+        const r = saTooltip.getBoundingClientRect()
+        const display = window.getComputedStyle(saTooltip).display
+        if (display !== 'none' && r.width > 0) {
+          results['Scroll Animator (tooltip)'] = { top: r.top, left: r.left, width: r.width }
+        }
+      }
+
+      return results
+    })
+  }
+
   test('Studio overlay panes remain at stable viewport coordinates during scroll', async ({ page }) => {
     await startViewer(page)
     await page.waitForTimeout(2000)
 
-    // Identify all .tp-dfwv elements and their identifying text at scroll top
-    const rectsAtTop = await page.evaluate(() => {
-      const panes = document.querySelectorAll('.tp-dfwv')
-      const results: { title: string; top: number; left: number }[] = []
-      panes.forEach((pane, i) => {
-        const r = pane.getBoundingClientRect()
-        // Try to identify the pane by its title text
-        const titleEl = pane.querySelector('.tp-rotv_t')
-        const title = titleEl?.textContent?.trim() || `tp-dfwv[#${i}]`
-        results.push({ title, top: r.top, left: r.left })
-      })
-      return results
+    // Open the panes we want to test:
+    // 1. Static State — click its toolbar button
+    await page.evaluate(() => {
+      const btn = document.querySelector('button[aria-label="Static State"]')
+      btn?.click()
     })
-    expect(rectsAtTop.length).toBeGreaterThan(0)
+    await page.waitForTimeout(300)
+
+    // 2. Scroll Animator extension — open its dropdown
+    await page.evaluate(() => {
+      const wrapper = document.querySelector('.scroll-animator-extension')
+      const btn = wrapper?.querySelector('button[aria-label="Toggle Pane"]')
+      btn?.click()
+    })
+    await page.waitForTimeout(300)
+
+    // 3. Inspector — select a scene object (Camera ScrollAnimator in hierarchy)
+    //    The Inspector renders when something is selected. We use evaluate to
+    //    click the hierarchy item because it may be inside the canvas overlay.
+    await page.evaluate(() => {
+      // Try to find and click the hierarchy row via the tree-view
+      const rows = document.querySelectorAll('.tv-row')
+      for (const row of rows) {
+        if (row.textContent?.includes('Camera ScrollAnimator')) {
+          ;(row as HTMLElement).click()
+          break
+        }
+      }
+    })
+    await page.waitForTimeout(500)
+
+    // Capture baseline at scroll top
+    const atTop = await captureOverlayRects(page)
+    const expectedKeys = Object.keys(atTop)
+    expect(expectedKeys.length).toBeGreaterThan(0)
 
     // Scroll to 50%
     await page.evaluate(() => { window.scrollTo(0, document.body.scrollHeight * 0.5) })
     await page.waitForTimeout(500)
 
-    const rectsAt50 = await page.evaluate(() => {
-      const panes = document.querySelectorAll('.tp-dfwv')
-      const results: { title: string; top: number; left: number }[] = []
-      panes.forEach((pane, i) => {
-        const r = pane.getBoundingClientRect()
-        const titleEl = pane.querySelector('.tp-rotv_t')
-        const title = titleEl?.textContent?.trim() || `tp-dfwv[#${i}]`
-        results.push({ title, top: r.top, left: r.left })
-      })
-      return results
-    })
+    const at50 = await captureOverlayRects(page)
 
-    // Scroll to near bottom
+    // Scroll to 95%
     await page.evaluate(() => { window.scrollTo(0, document.body.scrollHeight * 0.95) })
     await page.waitForTimeout(500)
 
-    const rectsAt95 = await page.evaluate(() => {
-      const panes = document.querySelectorAll('.tp-dfwv')
-      const results: { title: string; top: number; left: number }[] = []
-      panes.forEach((pane, i) => {
-        const r = pane.getBoundingClientRect()
-        const titleEl = pane.querySelector('.tp-rotv_t')
-        const title = titleEl?.textContent?.trim() || `tp-dfwv[#${i}]`
-        results.push({ title, top: r.top, left: r.left })
-      })
-      return results
-    })
+    const at95 = await captureOverlayRects(page)
 
-    // Assert each pane's coordinates are stable across all scroll positions (tolerance: 5px)
+    // Assert every expected pane is present at all scroll positions
+    // and coordinates are stable within tolerance
     const tolerance = 5
-    for (const pane of rectsAtTop) {
-      const at50 = rectsAt50.find((p) => p.title === pane.title)
-      const at95 = rectsAt95.find((p) => p.title === pane.title)
-      if (at50) {
-        expect(Math.abs(at50.top - pane.top)).toBeLessThan(
-          tolerance,
-        )
-        expect(Math.abs(at50.left - pane.left)).toBeLessThan(
-          tolerance,
-        )
-      }
-      if (at95) {
-        expect(Math.abs(at95.top - pane.top)).toBeLessThan(
-          tolerance,
-        )
-        expect(Math.abs(at95.left - pane.left)).toBeLessThan(
-          tolerance,
-        )
-      }
+    for (const key of expectedKeys) {
+      const baseline = atTop[key]
+      const middle = at50[key]
+      const bottom = at95[key]
+
+      expect(middle, `${key} disappeared at 50% scroll`).toBeDefined()
+      expect(bottom, `${key} disappeared at 95% scroll`).toBeDefined()
+
+      expect(Math.abs(middle.top - baseline.top)).toBeLessThan(tolerance)
+      expect(Math.abs(middle.left - baseline.left)).toBeLessThan(tolerance)
+
+      expect(Math.abs(bottom.top - baseline.top)).toBeLessThan(tolerance)
+      expect(Math.abs(bottom.left - baseline.left)).toBeLessThan(tolerance)
     }
   })
 
