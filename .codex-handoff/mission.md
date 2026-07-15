@@ -1,136 +1,132 @@
-# Follow-up Mission: Harden FixedToolbarPane Positioning and Verification
+# Mission: Keep Scroll Animator Pane Open Across Object Selection
+
+This is a fresh feature/behavior mission, not a continuation of the prior positioning verification pass.
 
 ## Objective
 
-Preserve the working scroll-first-open fix in `FixedToolbarPane.svelte`, but make its update lifecycle match the claims and close the remaining test/report gaps. The pane currently opens correctly after scrolling; this pass must ensure it also stays correctly anchored through viewport resize, layout shifts, and panel content-size changes, with strict viewport assertions and complete pane identity coverage.
+Make the Scroll Animator authoring pane persistent while the user changes selection in Threlte Studio's hierarchy. Once opened, it must remain open and reactively update its contents for the newly selected object. It should close only through an explicit user action: the Scroll Animator toolbar toggle or Escape.
 
-## Verified Remaining Issues
+## Confirmed Root Cause
 
-1. `FixedToolbarPane` imports only `computePosition` and installs a `ResizeObserver` on the anchor. An anchor resize observer does **not** detect:
-   - window/visual viewport resize when the anchor's size stays constant but position changes;
-   - ancestor layout or toolbar item movement;
-   - panel content-size changes;
-   - other reference/floating element layout shifts.
+`FixedToolbarPane.svelte` currently installs a document-level capture-phase `pointerdown` listener. Any pointer interaction outside the panel or its anchor calls `closePanel()`. A hierarchy selection is necessarily outside both, so selecting another object dismisses the pane even though `ScrollAnimatorExtension.svelte` already reacts to `objectSelection.selectedObjects` and can update its content correctly.
 
-   The status says the pane updates on resize/layout changes, but the implementation does not robustly do so. Floating UI's `autoUpdate` exists for this lifecycle.
+Do not solve this by special-casing Studio hierarchy CSS classes. That would depend on private DOM and would still close the pane when the user interacts with other useful authoring UI such as the Inspector or transform controls.
 
-2. `rafId` is never assigned. It is dead state/cleanup. The asynchronous `computePosition(...).then(...)` also has no identity/open guard, so a result from a closed/old panel can theoretically apply to a newly opened panel.
+The intended interaction model is a persistent authoring pane:
 
-3. The panel uses `role="menu"` but contains a heading, number input, ordinary buttons, and other form-like content rather than a menu/menuitem structure. Use an appropriate nonmodal dialog/region semantic with a real label relationship.
-
-4. The scroll-first tests do not strictly prove viewport intersection:
-   - the top test accepts `panel bottom < 10000`;
-   - later tests hard-code `800` rather than using the actual Playwright viewport height;
-   - they do not assert horizontal viewport intersection or anchor-relative placement.
-
-5. No test covers an already-open panel during scroll, viewport resizing, toolbar movement, or content resizing, despite the acceptance/status claims.
-
-6. The fixed-pane expected set still excludes Inspector and Default Camera. The report says those identities cannot silently disappear, but they are not expected or tested. The overlay setup also uses evaluate-based DOM clicks for Static State/Inspector while claiming all stub e2e clicks are native.
+- toolbar toggle opens/closes it;
+- Escape closes it;
+- hierarchy, Inspector, canvas, transform-control, and other outside interactions do not close it;
+- selection changes update the content in place.
 
 ## Files Likely Involved
 
 - `src/lib/studio/scroll-animator/FixedToolbarPane.svelte`
+- `src/lib/studio/scroll-animator/ScrollAnimatorExtension.svelte` only if a narrow selection/content key or test hook is needed
 - `tests/e2e/rad-viewer.spec.ts`
 - `AGENTS.md`
 - `.codex-handoff/status.md` as the final write
 
-Avoid production changes outside `FixedToolbarPane.svelte` unless a narrow stable test/accessibility hook is genuinely needed.
+## Detailed Design
 
-## Required Changes
+### 1. Remove outside-pointer dismissal
 
-### 1. Use Floating UI's complete positioning lifecycle
+- Remove the document `pointerdown` listener, `handlePointerDown`, its capture-phase registration, and its cleanup.
+- Do not add hierarchy-specific exceptions or inspect private Studio DOM classes.
+- Preserve the existing toggle and Escape close paths.
+- Preserve `autoUpdate`, body portal, fixed positioning strategy, stale-result guard, overflow behavior, and cleanup.
+- Update comments and `AGENTS.md` so they no longer claim outside pointer interaction closes the pane.
 
-Replace the anchor-only `ResizeObserver` and unused RAF state with `autoUpdate` from the already direct `@floating-ui/dom` dependency.
-
-Recommended shape:
+The core change should be small:
 
 ```ts
-import { autoUpdate, computePosition, flip, offset, shift } from '@floating-ui/dom'
-import { tick } from 'svelte'
+onMount(() => {
+  document.addEventListener('keydown', handleKeydown)
+})
 
-let stopAutoUpdate: (() => void) | undefined
-
-async function openPanel() {
-  open = true
-  await tick()
-  if (!open || !anchorEl || !panelEl) return
-  stopAutoUpdate?.()
-  stopAutoUpdate = autoUpdate(anchorEl, panelEl, updatePosition)
-}
-
-function closePanel() {
-  open = false
+onDestroy(() => {
+  document.removeEventListener('keydown', handleKeydown)
   stopAutoUpdate?.()
   stopAutoUpdate = undefined
+})
+```
+
+Keep cleanup idempotent; avoid redundant observer teardown if a single `closePanel()` call can own it safely.
+
+### 2. Update content reactively without remounting the pane
+
+`ScrollAnimatorExtension.svelte` already derives `singleAnimator` from Studio selection and refreshes `uiState.animator`/`uiState.keyframes`. Preserve and verify this behavior:
+
+- Selecting `Camera ScrollAnimator` shows its name and its keyframes.
+- Selecting `Camera Target ScrollAnimator` while the pane is open keeps the same pane open and replaces the displayed name/keyframe list with that animator's data.
+- Selecting a non-ScrollAnimator object while open keeps the pane open and shows the existing `Select one ScrollAnimator` state.
+- Selecting multiple objects or clearing selection also keeps it open and shows the non-single-animator state.
+- Returning to a ScrollAnimator updates the panel again without requiring close/reopen.
+- Current percentage remains driven by the shared runtime and must not reset merely because selection changes.
+- Unsaved Studio transform edits and the on-scroll-only ScrollTrigger invariant remain unchanged.
+
+Do not key/remount `FixedToolbarPane` on selection. The open state and portal element should remain stable; only the content changes.
+
+### 3. Preserve explicit close and focus behavior
+
+- Clicking the active Scroll Animator toolbar button closes the pane.
+- Pressing Escape closes it.
+- Escape should restore focus to the actual toolbar `<button>`, not merely the non-focusable anchor wrapper. Since public `ToolbarButton` does not expose `bind:this`, a narrow query inside the owned anchor wrapper is acceptable:
+
+```ts
+function focusToggle(): void {
+  anchorEl?.querySelector<HTMLButtonElement>('button')?.focus()
 }
 ```
 
-- Keep `strategy: 'fixed'` in every `computePosition` call.
-- Let `autoUpdate` cover ancestor scroll/resize, element resize for both anchor and panel, and layout shift. Use its defaults unless a measured browser issue requires a narrowly documented option.
-- Make `updatePosition` immune to stale async results: capture the current panel/anchor and apply only if the pane is still open and the element identities are unchanged.
-- Remove unused `rafId`, manual `ResizeObserver`, and redundant cleanup.
-- Cleanup must be idempotent on close and destroy. Repeated open/close/remount must not accumulate observers/listeners.
-- Preserve body portal, outside pointer close, Escape close, fixed strategy, flip/shift behavior, icon, and max-height overflow.
+- Do not add a modal focus trap. The pane remains a nonmodal labelled dialog so users can interact with the hierarchy and Inspector while it stays open.
 
-### 2. Correct panel accessibility semantics
+### 4. Add behavior-focused regression tests
 
-- Replace `role="menu"` with a suitable nonmodal dialog or labelled region. `role="dialog"` with `aria-labelledby` referencing the semantic `<h2>` is appropriate for this interactive authoring panel.
-- Give the heading a stable unique `id`; do not rely only on a duplicate `aria-label`.
-- Keep the toolbar button's descriptive accessible name `Scroll Animator` and active state.
-- On Escape, preserve/restore sensible focus to the toolbar toggle if necessary. Do not introduce a modal focus trap for a nonmodal Studio pane.
-- Keep outside-pointer interaction functional for panel controls and the toggle itself.
+Use native Playwright interactions where reliable in the Spark-stub e2e environment. Test at least:
 
-### 3. Make viewport and anchoring tests exact
+1. Open Scroll Animator with `Camera ScrollAnimator` selected; verify panel, heading, name, and camera keyframes.
+2. Without closing, select `Camera Target ScrollAnimator`; assert:
+   - the same panel remains visible;
+   - only one `.sa-panel-tooltip` exists;
+   - displayed animator name changes;
+   - keyframe list changes to the target animator's data.
+3. Select a non-ScrollAnimator such as `PerspectiveCamera`, `CameraTarget`, or SplatMesh; assert panel remains visible and shows `Select one ScrollAnimator`.
+4. Select the camera animator again; assert content returns without reopening.
+5. Click elsewhere in Studio/the canvas and confirm the panel remains open.
+6. Verify explicit toolbar-toggle close.
+7. Reopen, press Escape, verify close and actual toggle-button focus.
+8. Repeat selection switching after scrolling to 50% to ensure `autoUpdate` keeps the persistent panel in the viewport.
 
-Create a helper that reads the actual viewport (`window.innerWidth/innerHeight` or `page.viewportSize()`) and asserts:
-
-- `panel.left >= 0` and `panel.top >= 0`;
-- `panel.right <= viewport width` and `panel.bottom <= viewport height`, with a small rounding tolerance;
-- the panel is near the toolbar button according to the resolved placement (normally button bottom + offset, but allow Floating UI flip/shift on short viewports);
-- the panel is not merely under an arbitrary constant.
-
-Retain separate scroll-first-open tests for 0%, 50%, and 95%, but compare viewport/anchor rectangles using this helper. Remove `<10000` and hard-coded `<800` assertions.
-
-Add tests for:
-
-1. Open at top, then scroll while still open; assert it remains anchored/in viewport.
-2. Resize the Playwright viewport while open so the toolbar/panel must reposition; assert updated anchoring/in-viewport coordinates.
-3. Change panel content size while open (for example select/deselect a ScrollAnimator or otherwise use a deterministic content seam); assert auto-update keeps it in viewport.
-4. Repeat open/close and viewer remount; assert one panel only and no listener/observer errors.
-5. Escape and outside pointer closure using native Playwright input.
-
-### 4. Complete explicit pane identity tests and report clicks accurately
-
-- In stub e2e, use native Playwright selection of `Camera ScrollAnimator`—the existing helper already demonstrates hierarchy selection works—then explicitly require `Inspector`.
-- Open editor-camera mode and its Default Camera option through native locators and explicitly test the outer `.draggable-container`/Default Camera preview in its own focused test if simultaneous overlay state is impractical.
-- Open Static State with native Playwright `.click()` where stub e2e supports it.
-- It is acceptable to use multiple tests rather than keep transient dropdowns simultaneously open. It is not acceptable to exclude Inspector/Default Camera while saying all identities are covered.
-- Keep explicit expected names; do not derive the full expected set from whatever happens to render.
-- Update the report to enumerate which interactions use native Playwright input. Do not say “all use native” if any relevant setup still calls DOM `.click()` inside `evaluate()`.
+Prefer assertions against semantic text/roles and owned `.sa-*` selectors. Do not rely on private hierarchy class names when accessible text selection is available.
 
 ## Constraints
 
-- Preserve the local `FixedToolbarPane`, body portal, `strategy: 'fixed'`, direct Floating UI dependency, animation icon, semantic heading, scroll-first-open behavior, and overflow scrolling.
-- Do not restore Studio `DropDownPane` or patch/deep-import dependencies.
-- Do not use hard-coded top corrections, `window.scrollY` subtraction, polling loops, or permanent animation-frame positioning.
-- Do not change ScrollAnimator keyframes/interpolation/runtime/source-sync, GSAP ScrollTrigger, camera hierarchy/look-at, CameraControls bridge, Spark rendering/LOD, or SparkSplats API/origin.
-- Do not reintroduce free navigation or broadly restyle Studio.
-- Do not weaken assertions or convert native stub interactions to synthetic DOM events.
+- Do not add hierarchy-specific, Inspector-specific, or Tweakpane-private click exceptions.
+- Do not restore click-outside dismissal in another component/action.
+- Do not change Floating UI `strategy: 'fixed'`, `autoUpdate`, portal behavior, positioning middleware, or viewport overflow.
+- Do not change ScrollAnimator schema, interpolation, runtime progress, keyframe transactions, source-sync guard, or undo/redo.
+- Do not change GSAP/ScrollTrigger or allow per-frame playback to overwrite stationary editor modifications.
+- Do not change camera ownership, CameraTarget look-at, CameraControls bridge, Spark renderer/LOD routing, or SparkSplats API/origin.
+- Do not reintroduce free navigation.
+- Do not patch/deep-import dependencies or broadly restyle Studio.
+- Do not perform unrelated refactors.
 
 ## Acceptance Criteria
 
-- [ ] `autoUpdate` owns the open panel's positioning lifecycle and is cleaned up exactly once/idempotently on close/destroy.
-- [ ] Anchor scroll/resize/layout movement and panel content resizing all trigger correct fixed-strategy repositioning.
-- [ ] No unused RAF/observer state or stale async position result can affect a closed/new panel.
-- [ ] Panel uses valid labelled dialog/region semantics for its mixed interactive content.
-- [ ] Top/50%/95% tests assert against actual viewport width/height and anchor geometry.
-- [ ] Tests cover already-open scrolling, viewport resize, content resize, repeated open/close/remount, Escape, and outside pointer.
-- [ ] Inspector and Default Camera are explicitly opened, identified, and viewport-position tested in stub e2e (separate focused tests allowed).
-- [ ] Relevant stub e2e controls use native Playwright input; status accurately identifies any remaining evaluate-based interactions.
-- [ ] Existing production behavior and all prior fixes remain intact.
-- [ ] `AGENTS.md` describes `autoUpdate`, fixed strategy, dialog semantics, and the full regression contract accurately.
+- [ ] Once opened, the Scroll Animator pane remains open during hierarchy selection, Inspector interaction, canvas clicks, and other outside pointer interactions.
+- [ ] Switching between Camera and Camera Target ScrollAnimators updates name and keyframes in place with exactly one panel instance.
+- [ ] Selecting a non-ScrollAnimator, multiple objects, or no object keeps the pane open and shows the correct neutral state.
+- [ ] Returning to a ScrollAnimator repopulates content without close/reopen.
+- [ ] Selection changes do not reset scroll percentage or mutate source/animator transforms.
+- [ ] Toolbar toggle and Escape remain the only close mechanisms.
+- [ ] Escape returns focus to the actual Scroll Animator toolbar button.
+- [ ] Persistent pane remains correctly fixed/in viewport while selection changes at nonzero scroll.
+- [ ] Outside-pointer listener and related documentation/tests are fully removed.
+- [ ] Existing positioning, camera, animation, source-sync, and Spark behavior remains intact.
+- [ ] New e2e tests cover the complete selection-switching sequence and explicit close paths.
 
-Re-check every acceptance item before finalizing. Do not mark untested update triggers or panes complete.
+Re-check every acceptance item immediately before finalizing. Test implementation details pragmatically; prioritize the user-visible persistent-pane behavior and honest reporting.
 
 ## Tests to Run
 
@@ -144,40 +140,49 @@ npm run test:e2e
 npm run build
 ```
 
-Use `https://avner.us/baby_yoda-lod.rad` for a final real-browser scroll-first-open and resize check. Native pointer limitations in real headless WebGL must remain separate from stub e2e evidence.
+Manual verification with `https://avner.us/baby_yoda-lod.rad`:
+
+1. Open Scroll Animator.
+2. Select Camera ScrollAnimator, Camera Target ScrollAnimator, the camera child, and the SplatMesh in succession.
+3. Confirm the pane never closes and its content follows selection.
+4. Scroll to the middle and repeat.
+5. Confirm toggle and Escape still close it deliberately.
+
+If real WebGL automation requires synthetic events, report that limitation honestly; the core evidence is persistent visibility and reactive content across actual selection changes.
 
 ## Things Pi Must Not Change
 
-- ScrollAnimator data, animation, source synchronization, or transaction guard.
-- Default/editor camera and CameraTarget behavior.
-- CameraControls tuning bridge.
-- Spark renderer/LOD architecture or SparkSplats simplification.
-- Unrelated UI, configuration, dependencies, and tests.
+- FixedToolbarPane fixed/auto-update positioning architecture.
+- ScrollAnimator animation, authoring, and source synchronization.
+- Camera/CameraTarget hierarchy and editor-camera behavior.
+- CameraControls bridge.
+- Spark renderers, LOD behavior, and SparkSplats simplification.
+- Unrelated application UI, dependencies, configuration, and tests.
 
 ## AGENTS.md Update
 
-Update the existing FixedToolbarPane section concisely:
+Update `AGENTS.md` concisely to state:
 
-- positioning uses `strategy: 'fixed'` plus `autoUpdate` for ancestor scroll/resize, element resize, and layout shifts;
-- cleanup and stale-result guard are required invariants;
-- panel is a labelled nonmodal dialog/region, not an ARIA menu;
-- tests use actual viewport geometry and cover scroll-first-open, open-while-scroll, resize, and content changes.
+- Scroll Animator is a persistent nonmodal authoring pane;
+- outside pointer interactions do not close it;
+- only the toolbar toggle and Escape close it;
+- selection changes update the pane in place, including the neutral state for non-single-ScrollAnimator selection;
+- Escape restores focus to the actual toggle button.
 
-Do not add a chronological log.
+Do not add a chronological implementation log.
 
 ## Expected Completion Report
 
 Write `.codex-handoff/status.md` with:
 
-1. Summary and commits.
+1. Summary and implementation commit.
 2. Files changed.
-3. Positioning lifecycle before/after, including cleanup and stale-result handling.
-4. Accessibility semantics.
-5. Exact viewport/anchor evidence for top/50%/95%, open-scroll, resize, and content resizing.
-6. Inspector and Default Camera results.
-7. Native versus evaluate interaction inventory.
-8. Real Baby Yoda result.
-9. Exact automated check outputs.
-10. Acceptance audit and remaining risks.
+3. Root cause and dismissal-policy change.
+4. Selection/content state behavior for camera animator, target animator, and non-animator selection.
+5. Explicit toggle/Escape/focus behavior.
+6. Nonzero-scroll persistent-pane evidence.
+7. Automated and real Baby Yoda verification results.
+8. Exact test command results.
+9. Acceptance audit and remaining risks.
 
-Always write `status.md` as the **last action** before committing and pushing. After writing it, do not run verification, modify documentation, or make any other changes. Commit all work and push the current branch.
+Always write `status.md` as the **last action** before committing and pushing. After writing it, do not run verification, edit documentation, or make any other modification. Commit all work and push the current branch.
