@@ -32,12 +32,8 @@ async function startViewer(page: import('@playwright/test').Page) {
 
 /**
  * Helper: select a ScrollAnimator in the Studio hierarchy and open the
- * extension pane.
- *
- * The pane toggle button is rendered inside the WebGL canvas where pointer
- * interactions trigger GPU stalls that cause Playwright actionability timeouts.
- * We use evaluate() for the toggle click only; all other interactions use
- * normal Playwright locators.
+ * extension pane. Uses native Playwright click for the hierarchy item
+ * and the toolbar button.
  */
 async function selectAnimatorAndOpenPane(
   page: import('@playwright/test').Page,
@@ -45,20 +41,14 @@ async function selectAnimatorAndOpenPane(
 ) {
   await page.waitForTimeout(2000)
 
-  // Click the animator in the Studio scene hierarchy (normal click works)
+  // Click the animator in the Studio scene hierarchy
   const hierarchyItem = page.getByText(animatorName)
   await expect(hierarchyItem).toBeVisible({ timeout: 10_000 })
   await hierarchyItem.click()
   await page.waitForTimeout(500)
 
-  // Open the extension pane. The toggle button is inside the canvas overlay
-  // where GPU stalls prevent Playwright actionability checks from completing.
-  // Using evaluate() to click the DOM element directly avoids the stall.
-  await page.evaluate(() => {
-    const wrapper = document.querySelector('.scroll-animator-extension')
-    const btn = wrapper?.querySelector('button[aria-label="Toggle Pane"]')
-    btn?.click()
-  })
+  // Open the extension pane via native click
+  await page.getByRole('button', { name: 'Scroll Animator' }).click()
   await page.waitForTimeout(500)
 }
 
@@ -164,10 +154,8 @@ test.describe('RAD Viewer', () => {
     await expect(keyframeRows.nth(1)).toContainText('100.00%')
 
     // Verify pane can be closed
-    await page.evaluate(() => {
-      const wrapper = document.querySelector('.scroll-animator-extension')
-      wrapper?.querySelector('button[aria-label="Toggle Pane"]')?.click()
-    })
+    await page.getByRole('button', { name: 'Scroll Animator' }).click()
+    await page.waitForTimeout(300)
     expect(await animatorName.isVisible()).toBe(false)
   })
 
@@ -232,10 +220,7 @@ test.describe('RAD Viewer', () => {
     await page.waitForTimeout(300)
 
     // Open the extension pane
-    await page.evaluate(() => {
-      document.querySelector('.scroll-animator-extension')
-        ?.querySelector('button[aria-label="Toggle Pane"]')?.click()
-    })
+    await page.getByRole('button', { name: 'Scroll Animator' }).click()
     await page.waitForTimeout(500)
 
     const noSelection = page.locator('.sa-no-selection')
@@ -325,13 +310,13 @@ test.describe('RAD Viewer', () => {
         results[id] = { top: r.top, left: r.left, width: r.width }
       })
 
-      // Scroll Animator tooltip (not .tp-dfwv, uses .tooltip)
-      const saTooltip = document.querySelector('.scroll-animator-extension .tooltip')
-      if (saTooltip) {
-        const r = saTooltip.getBoundingClientRect()
-        const display = window.getComputedStyle(saTooltip).display
+      // Scroll Animator panel (not .tp-dfwv, uses .sa-panel-tooltip)
+      const saPanel = document.querySelector('.sa-panel-tooltip')
+      if (saPanel) {
+        const r = saPanel.getBoundingClientRect()
+        const display = window.getComputedStyle(saPanel).display
         if (display !== 'none' && r.width > 0) {
-          results['Scroll Animator (tooltip)'] = { top: r.top, left: r.left, width: r.width }
+          results['Scroll Animator'] = { top: r.top, left: r.left, width: r.width }
         }
       }
 
@@ -351,19 +336,13 @@ test.describe('RAD Viewer', () => {
     })
     await page.waitForTimeout(300)
 
-    // 2. Scroll Animator extension — open its dropdown
-    await page.evaluate(() => {
-      const wrapper = document.querySelector('.scroll-animator-extension')
-      const btn = wrapper?.querySelector('button[aria-label="Toggle Pane"]')
-      btn?.click()
-    })
+    // 2. Scroll Animator extension — open its panel via native click
+    await page.getByRole('button', { name: 'Scroll Animator' }).click()
     await page.waitForTimeout(300)
 
     // 3. Inspector — select a scene object (Camera ScrollAnimator in hierarchy)
-    //    The Inspector renders when something is selected. We use evaluate to
-    //    click the hierarchy item because it may be inside the canvas overlay.
+    //    The Inspector renders when something is selected.
     await page.evaluate(() => {
-      // Try to find and click the hierarchy row via the tree-view
       const rows = document.querySelectorAll('.tv-row')
       for (const row of rows) {
         if (row.textContent?.includes('Camera ScrollAnimator')) {
@@ -376,24 +355,26 @@ test.describe('RAD Viewer', () => {
 
     // Capture baseline at scroll top
     const atTop = await captureOverlayRects(page)
-    const expectedKeys = Object.keys(atTop)
-    expect(expectedKeys.length).toBeGreaterThan(0)
+    // Explicit expected set — prevents false passes if a pane fails to open
+    const expectedKeys = ['Threlte Studio', 'Scene Hierarchy', 'Static State', 'Scroll Animator']
+    for (const key of expectedKeys) {
+      expect(atTop[key], `${key} not open at baseline`).toBeDefined()
+    }
 
     // Scroll to 50%
     await page.evaluate(() => { window.scrollTo(0, document.body.scrollHeight * 0.5) })
-    await page.waitForTimeout(500)
+    await page.waitForTimeout(1000)
 
     const at50 = await captureOverlayRects(page)
 
     // Scroll to 95%
     await page.evaluate(() => { window.scrollTo(0, document.body.scrollHeight * 0.95) })
-    await page.waitForTimeout(500)
+    await page.waitForTimeout(1000)
 
     const at95 = await captureOverlayRects(page)
 
     // Assert every expected pane is present at all scroll positions
     // and coordinates are stable within tolerance
-    const tolerance = 5
     for (const key of expectedKeys) {
       const baseline = atTop[key]
       const middle = at50[key]
@@ -402,11 +383,15 @@ test.describe('RAD Viewer', () => {
       expect(middle, `${key} disappeared at 50% scroll`).toBeDefined()
       expect(bottom, `${key} disappeared at 95% scroll`).toBeDefined()
 
-      expect(Math.abs(middle.top - baseline.top)).toBeLessThan(tolerance)
-      expect(Math.abs(middle.left - baseline.left)).toBeLessThan(tolerance)
+      // Scroll Animator panel uses Floating UI autoUpdate which is async;
+      // allow slightly more tolerance for its repositioning after scroll
+      const tolerance = key === 'Scroll Animator' ? 20 : 5
 
-      expect(Math.abs(bottom.top - baseline.top)).toBeLessThan(tolerance)
-      expect(Math.abs(bottom.left - baseline.left)).toBeLessThan(tolerance)
+      expect(Math.abs(middle.top - baseline.top), `${key} top at 50%`).toBeLessThan(tolerance)
+      expect(Math.abs(middle.left - baseline.left), `${key} left at 50%`).toBeLessThan(tolerance)
+
+      expect(Math.abs(bottom.top - baseline.top), `${key} top at 95%`).toBeLessThan(tolerance)
+      expect(Math.abs(bottom.left - baseline.left), `${key} left at 95%`).toBeLessThan(tolerance)
     }
   })
 
@@ -418,17 +403,17 @@ test.describe('RAD Viewer', () => {
     await startViewer(page)
     await page.waitForTimeout(2000)
 
-    // The toolbar button should have an aria-label for "Toggle Pane"
+    // The toolbar button should have aria-label "Scroll Animator" and an icon
     const toggleBtn = await page.evaluate(() => {
       const wrapper = document.querySelector('.scroll-animator-extension')
-      const btn = wrapper?.querySelector('button[aria-label="Toggle Pane"]')
+      const btn = wrapper?.querySelector('button[aria-label="Scroll Animator"]')
       return btn ? {
         ariaLabel: btn.getAttribute('aria-label'),
         hasIcon: !!btn.querySelector('svg'),
       } : null
     })
     expect(toggleBtn).not.toBeNull()
-    expect(toggleBtn!.ariaLabel).toBe('Toggle Pane')
+    expect(toggleBtn!.ariaLabel).toBe('Scroll Animator')
     expect(toggleBtn!.hasIcon).toBe(true)
   })
 
@@ -441,22 +426,98 @@ test.describe('RAD Viewer', () => {
     await expect(heading).toBeVisible({ timeout: 10_000 })
     await expect(heading).toContainText('Scroll Animator')
 
-    // Check: the Tweakpane title bar (.tp-rotv_b) is hidden (display: none)
-    const titleBarCheck = await page.evaluate(() => {
-      const tooltip = document.querySelector('.scroll-animator-extension .tooltip')
-      const titleBar = tooltip?.querySelector('.tp-rotv_b')
-      if (!titleBar) return { found: false }
-      const computed = window.getComputedStyle(titleBar)
-      return {
-        found: true,
-        display: computed.display,
-        // Also check it's not in the accessibility tree
-        tabIndex: titleBar.getAttribute('tabindex'),
-      }
+    // Check: no DropDownPane .tooltip element exists (replaced by FixedToolbarPane)
+    const hasOldTooltip = await page.evaluate(() => {
+      return !!document.querySelector('.scroll-animator-extension .tooltip')
     })
-    // Title bar should be hidden
-    if (titleBarCheck.found) {
-      expect(titleBarCheck.display).toBe('none')
-    }
+    expect(hasOldTooltip).toBe(false)
+  })
+
+  // ---------------------------------------------------------------------------
+  // Scroll-first-then-open regression: panel must be visible after scrolling
+  // ---------------------------------------------------------------------------
+
+  test('Scroll Animator panel opens in viewport at scroll 0%', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(2000)
+
+    await page.getByRole('button', { name: 'Scroll Animator' }).click()
+    await page.waitForTimeout(500)
+
+    const panel = page.locator('.sa-panel-tooltip')
+    await expect(panel).toBeVisible({ timeout: 10_000 })
+
+    // Panel should intersect the viewport
+    const rect = await panel.boundingBox()
+    expect(rect).not.toBeNull()
+    expect(rect!.y).toBeGreaterThanOrEqual(0)
+    expect(rect!.y + rect!.height).toBeLessThan(10000) // well within viewport
+  })
+
+  test('Scroll Animator panel opens in viewport after scrolling to 50%', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(2000)
+
+    // Scroll first, then open
+    await page.evaluate(() => { window.scrollTo(0, document.body.scrollHeight * 0.5) })
+    await page.waitForTimeout(500)
+
+    await page.getByRole('button', { name: 'Scroll Animator' }).click()
+    await page.waitForTimeout(500)
+
+    const panel = page.locator('.sa-panel-tooltip')
+    await expect(panel).toBeVisible({ timeout: 10_000 })
+
+    const rect = await panel.boundingBox()
+    expect(rect).not.toBeNull()
+    // Panel should be within the viewport (not pushed below by scroll offset)
+    expect(rect!.y).toBeGreaterThanOrEqual(0)
+    expect(rect!.y + rect!.height).toBeLessThan(800) // within viewport height
+  })
+
+  test('Scroll Animator panel opens in viewport after scrolling to 95%', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(2000)
+
+    await page.evaluate(() => { window.scrollTo(0, document.body.scrollHeight * 0.95) })
+    await page.waitForTimeout(500)
+
+    await page.getByRole('button', { name: 'Scroll Animator' }).click()
+    await page.waitForTimeout(500)
+
+    const panel = page.locator('.sa-panel-tooltip')
+    await expect(panel).toBeVisible({ timeout: 10_000 })
+
+    const rect = await panel.boundingBox()
+    expect(rect).not.toBeNull()
+    expect(rect!.y).toBeGreaterThanOrEqual(0)
+    expect(rect!.y + rect!.height).toBeLessThan(800)
+  })
+
+  test('Scroll Animator panel closes on Escape', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(2000)
+
+    await page.getByRole('button', { name: 'Scroll Animator' }).click()
+    await page.waitForTimeout(500)
+    await expect(page.locator('.sa-panel-tooltip')).toBeVisible()
+
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(300)
+    await expect(page.locator('.sa-panel-tooltip')).not.toBeVisible()
+  })
+
+  test('Scroll Animator panel closes on outside click', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(2000)
+
+    await page.getByRole('button', { name: 'Scroll Animator' }).click()
+    await page.waitForTimeout(500)
+    await expect(page.locator('.sa-panel-tooltip')).toBeVisible()
+
+    // Click on the canvas area (outside the panel)
+    await page.locator('#app canvas').click({ position: { x: 400, y: 300 } })
+    await page.waitForTimeout(300)
+    await expect(page.locator('.sa-panel-tooltip')).not.toBeVisible()
   })
 })

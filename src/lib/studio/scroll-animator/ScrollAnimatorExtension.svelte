@@ -1,8 +1,10 @@
 <script lang="ts">
   import { onMount, onDestroy, type Snippet } from 'svelte'
-  import { useStudio, ToolbarItem, DropDownPane } from '@threlte/studio/extend'
+  import { useStudio } from '@threlte/studio/extend'
   import { useObjectSelection, useTransactions } from '@threlte/studio/extensions'
   import type { Object3D } from 'three'
+
+  let { children }: { children?: Snippet } = $props()
   import type { ScrollKeyframe } from '$lib/spark/scrollAnimation'
 
   /** Structural type for accessing ScrollAnimator properties via brand. */
@@ -18,8 +20,7 @@
   } from '$lib/spark/scrollAnimation'
   import { guardScrollAnimatorTransactions, isScrollAnimator, type GuardTransaction } from './transactionGuard'
   import { scrollAnimatorRuntime } from './scrollAnimatorRuntime'
-
-  let { children }: { children?: Snippet } = $props()
+  import FixedToolbarPane from './FixedToolbarPane.svelte'
 
   const { createExtension } = useStudio()
   const objectSelection = useObjectSelection()
@@ -193,100 +194,86 @@
   }
 </script>
 
-<ToolbarItem position="left">
-  <div class="scroll-animator-extension">
-    <DropDownPane title=" " icon="mdiAnimationOutline">
-      <h2 class="sa-heading">Scroll Animator</h2>
-      {#if !uiState.animator}
-        <div class="sa-no-selection">Select one ScrollAnimator</div>
-      {:else}
-        <div class="sa-panel">
-          <div class="sa-animator-name">{uiState.animator.name || 'ScrollAnimator'}</div>
+<FixedToolbarPane>
+  {#if !uiState.animator}
+    <div class="sa-no-selection">Select one ScrollAnimator</div>
+  {:else}
+    <div class="sa-panel">
+      <div class="sa-animator-name">{uiState.animator.name || 'ScrollAnimator'}</div>
 
-          {#if !transactions.vitePluginEnabled}
-            <div class="sa-warning">Studio source sync unavailable — persistence controls disabled</div>
-          {/if}
-
-          <!-- Percentage input — always available for navigation -->
-          <div class="sa-percent-row">
-            <label class="sa-label" for="sa-percent-input">Percentage:</label>
-            <input
-              id="sa-percent-input"
-              type="number"
-              class="sa-percent-input"
-              min="0"
-              max="100"
-              step="0.01"
-              value={uiState.percentageDraft}
-              onfocus={() => { uiState.inputFocused = true }}
-              onblur={() => {
-                uiState.inputFocused = false
-                handlePercentageCommit()
-              }}
-              oninput={handlePercentageInput}
-              onkeydown={(e: KeyboardEvent) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  handlePercentageCommit()
-                  ;(e.target as HTMLInputElement).blur()
-                }
-              }}
-            />
-            <span class="sa-percent-display">{currentPercentage.toFixed(2)}%</span>
-          </div>
-
-          <!-- Keyframe list -->
-          <div class="sa-keyframes">
-            {#each uiState.keyframes as kf}
-              <div class="sa-kf-row">
-                <button
-                  class="sa-kf-pct"
-                  type="button"
-                  onclick={() => handleJumpToKeyframe(kf.scroll)}
-                  title="Jump to {kf.scroll.toFixed(2)}%"
-                >
-                  {kf.scroll.toFixed(2)}%
-                </button>
-                <span class="sa-kf-pos">[{kf.position.map((v) => v.toFixed(2)).join(', ')}]</span>
-                {#if transactions.vitePluginEnabled}
-                  <button
-                    class="sa-kf-delete"
-                    type="button"
-                    onclick={() => handleDeleteKeyframe(kf.scroll)}
-                    title="Delete keyframe"
-                    aria-label="Delete keyframe at {kf.scroll.toFixed(2)}%"
-                  >
-                    ✕
-                  </button>
-                {/if}
-              </div>
-            {/each}
-          </div>
-
-          <!-- Insert keyframe button — only when source sync available -->
-          {#if transactions.vitePluginEnabled}
-            <button class="sa-insert-btn" type="button" onclick={handleInsertKeyframe}>
-              Insert/save scroll keyframe
-            </button>
-          {/if}
-        </div>
+      {#if !transactions.vitePluginEnabled}
+        <div class="sa-warning">Studio source sync unavailable — persistence controls disabled</div>
       {/if}
-    </DropDownPane>
-  </div>
-</ToolbarItem>
+
+      <!-- Percentage input — always available for navigation -->
+      <div class="sa-percent-row">
+        <label class="sa-label" for="sa-percent-input">Percentage:</label>
+        <input
+          id="sa-percent-input"
+          type="number"
+          class="sa-percent-input"
+          min="0"
+          max="100"
+          step="0.01"
+          value={uiState.percentageDraft}
+          onfocus={() => { uiState.inputFocused = true }}
+          onblur={() => {
+            uiState.inputFocused = false
+            handlePercentageCommit()
+          }}
+          oninput={handlePercentageInput}
+          onkeydown={(e: KeyboardEvent) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              handlePercentageCommit()
+              ;(e.target as HTMLInputElement).blur()
+            }
+          }}
+        />
+        <span class="sa-percent-display">{currentPercentage.toFixed(2)}%</span>
+      </div>
+
+      <!-- Keyframe list -->
+      <div class="sa-keyframes">
+        {#each uiState.keyframes as kf}
+          <div class="sa-kf-row">
+            <button
+              class="sa-kf-pct"
+              type="button"
+              onclick={() => handleJumpToKeyframe(kf.scroll)}
+              title="Jump to {kf.scroll.toFixed(2)}%"
+            >
+              {kf.scroll.toFixed(2)}%
+            </button>
+            <span class="sa-kf-pos">[{kf.position.map((v) => v.toFixed(2)).join(', ')}]</span>
+            {#if transactions.vitePluginEnabled}
+              <button
+                class="sa-kf-delete"
+                type="button"
+                onclick={() => handleDeleteKeyframe(kf.scroll)}
+                title="Delete keyframe"
+                aria-label="Delete keyframe at {kf.scroll.toFixed(2)}%"
+              >
+                ✕
+              </button>
+            {/if}
+          </div>
+        {/each}
+      </div>
+
+      <!-- Insert keyframe button — only when source sync available -->
+      {#if transactions.vitePluginEnabled}
+        <button class="sa-insert-btn" type="button" onclick={handleInsertKeyframe}>
+          Insert/save scroll keyframe
+        </button>
+      {/if}
+    </div>
+  {/if}
+</FixedToolbarPane>
 
 {@render children?.()}
 
 <style>
-  .sa-heading {
-    font-size: 11px;
-    font-weight: 600;
-    color: #999;
-    margin: 0;
-    padding: 4px 8px;
-    pointer-events: none;
-  }
-
   .sa-no-selection {
     padding: 8px;
     color: #888;

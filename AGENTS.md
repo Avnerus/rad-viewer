@@ -12,6 +12,7 @@ A client-side Threlte/Svelte 5/TypeScript web app for viewing Spark 2.x streamin
 - `src/lib/spark/ScrollAnimator.ts` — Three.js `Object3D` subclass with `keyframes` property and `applyScrollPercentage()`.
 - `src/lib/spark/scrollAnimation.ts` — Pure keyframe model, canonicalization (with dedup), upsert/delete, bracketing, and interpolation (position lerp + quaternion slerp).
 - `src/lib/studio/scroll-animator/ScrollAnimatorExtension.svelte` — Studio extension: fixed toolbar pane with percentage display/input, keyframe list, jump, delete, and insert/save actions. Uses public `@threlte/studio/extensions` imports. Toolbar icon: `mdiAnimationOutline`.
+- `src/lib/studio/scroll-animator/FixedToolbarPane.svelte` — Local replacement for Studio's `DropDownPane`. Uses public `ToolbarButton` + `ToolbarItem` from `@threlte/studio/extend`, `@floating-ui/dom` (direct dependency) for `computePosition` with `strategy: 'fixed'`, and a simple portal to `document.body`. See "Studio Extension Pane" section below.
 - `src/lib/studio/scroll-animator/scrollAnimatorRuntime.ts` — Shared runtime bridge: reactive percentage from ScrollTrigger, `jumpToPercentage` via trigger's measured range, attach/detach lifecycle.
 - `src/lib/studio/scroll-animator/transactionGuard.ts` — Suppresses source sync for ScrollAnimator transform attributes; only `keyframes` persists. Uses narrow structural types (no private imports).
 - `src/lib/studio/editor-camera/editorCameraControlsBridge.ts` — Future-facing, typed bridge for Studio editor CameraControls tuning. Currently unattached (no supported public path to the CameraControls instance). Documented in code.
@@ -56,17 +57,24 @@ The `scrollAnimatorRuntime` singleton bridges the scene and extension:
 - Camera animator rotation does not fight the target constraint — look-at wins for the camera's final viewing direction.
 - **Editor camera toggle**: Studio's built-in editor-camera extension can override the active camera. When disabled, Threlte restores the default camera (the nested `PerspectiveCamera`). When enabled, Studio's editor camera takes over. The `data-active` attribute on the camera debug element indicates whether the app camera is currently active.
 
-## Studio Extension UI
+## Studio Extension Pane
 
-Registered via `<Studio extensions={[ScrollAnimatorExtension]}>`. Uses public `useObjectSelection` and `useTransactions` from `@threlte/studio/extensions`. Shows a `DropDownPane` with `icon="mdiAnimationOutline"` (default toggle behavior) with:
+Registered via `<Studio extensions={[ScrollAnimatorExtension]}>`. Uses public `useObjectSelection` and `useTransactions` from `@threlte/studio/extensions`. The toolbar button and panel are provided by `FixedToolbarPane.svelte` (a local component, not Studio's `DropDownPane`), with `icon="mdiAnimationOutline"` and `label="Scroll Animator"`.
 
-- The `DropDownPane` title bar inside the tooltip is hidden with `display: none` via targeted CSS in `app.css` (`.scroll-animator-extension .tooltip .tp-rotv_b`). A semantic `<h2 class="sa-heading">Scroll Animator</h2>` heading is rendered in the extension content instead. This removes the inert Tweakpane title button from the DOM visibility, focus order, and accessibility tree.
-1. Live ScrollTrigger percentage from the shared runtime bridge.
-2. Numeric percentage input (0..100) — available in all modes; draft string not overwritten while focused; commits on Enter/blur with double-commit guard.
-3. Sorted keyframe list with clickable jump buttons (always) and delete buttons (source-sync only).
-4. "Insert/save scroll keyframe" button (source-sync only) — captures local position + Euler rotation at current percentage.
+**Why not `DropDownPane`:** Studio's `DropDownPane` uses Floating UI's default `strategy: 'absolute'` internally, which returns document-relative coordinates. When applied to its `position: fixed` tooltip element after scrolling, this pushes the panel below the viewport. `FixedToolbarPane` uses `strategy: 'fixed'` explicitly and portals the panel to `document.body` so it renders above the Studio canvas overlay.
+
+**Positioning invariant:** `computePosition(anchor, panel, { strategy: 'fixed', ... })` must always use `strategy: 'fixed'`. The panel is portal'd to `document.body` via a simple Svelte action. A `ResizeObserver` on the anchor repositions on layout changes. The panel uses `:global(.sa-panel-tooltip) { position: fixed }` CSS scoped via `:global()` to survive the portal.
+
+**Panel content:**
+1. Semantic `<h2 class="sa-heading">Scroll Animator</h2>` heading (no inert Tweakpane title button).
+2. Live ScrollTrigger percentage from the shared runtime bridge.
+3. Numeric percentage input (0..100) — available in all modes; draft string not overwritten while focused; commits on Enter/blur with double-commit guard.
+4. Sorted keyframe list with clickable jump buttons (always) and delete buttons (source-sync only).
+5. "Insert/save scroll keyframe" button (source-sync only) — captures local position + Euler rotation at current percentage.
 
 Active only for exactly one selected `ScrollAnimator`; otherwise shows "Select one ScrollAnimator". When source sync is unavailable, a warning is shown but percentage navigation and keyframe jumps remain functional.
+
+**Lifecycle:** Panel closes on Escape key and outside pointer interaction (capture phase). All observers are cleaned up on close and destroy.
 
 ## Source-Sync Guard Invariant
 
@@ -123,7 +131,7 @@ Visually hidden `<div class="camera-debug" data-testid="camera-state">` with:
 
 ## Studio Overlay Scroll-Safety
 
-Tweakpane's `.tp-dfwv` class (used by Studio's toolbar and other fixed panes) defaults to `position: absolute`, which causes panes to scroll with the document. A targeted rule in `app.css` overrides this to `position: fixed !important` for all `.tp-dfwv` elements. Inline panes nested inside `DropDownPane` do not carry `.tp-dfwv` at the top level, so they are unaffected.
+Tweakpane's `.tp-dfwv` class (used by Studio's toolbar and other fixed panes) defaults to `position: absolute`, which causes panes to scroll with the document. A targeted rule in `app.css` overrides this to `position: fixed !important` for all `.tp-dfwv` elements. The Scroll Animator panel is not a `.tp-dfwv` pane — it uses `FixedToolbarPane` which portals to `document.body` with `position: fixed` and Floating UI `strategy: 'fixed'`.
 
 ## Editor CameraControls Bridge
 
@@ -165,6 +173,10 @@ https://storage.googleapis.com/forge-dev-public/asundqui/rad/260217/cozy-spacesh
 ## E2E Testing
 
 `npm run test:e2e` builds with `VITE_E2E_STUB_SPARK=true`. Studio UI elements are rendered inside the WebGL canvas overlay, so Playwright actionability checks can fail. Tests use targeted `page.evaluate()` for pane toggle clicks when necessary, while verifying visible content through standard locators.
+
+**Scroll-first-then-open regression:** The Scroll Animator panel must be tested at scroll 0%, 50%, and 95% with the **scroll-first-then-open** sequence (scroll to percentage, then click the toolbar button). Opening at scroll 0 and then scrolling is insufficient — the bug was that `strategy: 'absolute'` returned document-relative coords that only manifested when the panel was opened after scrolling.
+
+**Pointer evidence:** In the Spark-stub e2e tests, native Playwright `.click()` works reliably. With real splat rendering in headless Chromium, native clicks may time out due to GPU stalls; synthetic `dispatchEvent` via `page.evaluate()` can diagnose handler execution but does not verify hit testing/pointer actionability. Manual verification with `playwright-cli` should prefer native pointer commands.
 
 For real-splat visual verification, use `playwright-cli screenshot` with the lightweight RAD URL (see above). Screenshots capture the compositor output correctly even when `readPixels()` returns black in headless mode.
 
