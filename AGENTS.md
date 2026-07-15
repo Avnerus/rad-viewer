@@ -142,7 +142,10 @@ Quick manual check with `playwright-cli`:
 2. Fill the URL input with the lightweight RAD URL, click Start
 3. `playwright-cli screenshot` — confirms Baby Yoda renders at scroll 0%
 4. `playwright-cli eval "window.scrollTo(0, document.body.scrollHeight)"` then `playwright-cli screenshot` — confirms top-down grid view at scroll 100%
-5. Toggle Editor Camera button, check `data-active` attribute, toggle back — confirms camera ownership round-trip
+5. Toggle Editor Camera via evaluate (toolbar buttons are inside the canvas overlay and block normal pointer clicks):
+   `playwright-cli eval "var btn=document.querySelector('button[aria-label=\"Editor Camera\"]'); btn.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,view:window}))"`
+   Then check: `playwright-cli eval "document.querySelector('[data-testid=camera-state]').getAttribute('data-active')"`
+   Toggle back the same way — confirms camera ownership round-trip (`true → false → true`)
 
 The existing larger sample remains documented below for high-load/LOD testing.
 
